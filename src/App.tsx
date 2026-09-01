@@ -657,7 +657,7 @@ function DashboardContent() {
       ...p,
       name: data.name,
       phone: data.phone,
-      profilePicture: data.profilePicture !== undefined ? data.profilePicture : p.profilePicture,
+      profilePicture: data.profilePicture || undefined,
       dob: data.dob || p.dob,
       gender: data.gender || p.gender,
       emergencyContact: data.emergencyContact || p.emergencyContact,

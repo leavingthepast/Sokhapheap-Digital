@@ -1209,15 +1209,6 @@ interface EditProfileModalProps {
   onSave: (data: EditProfileFormData) => void;
 }
 
-const PRESET_AVATARS = [
-  'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=256',
-  'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=256',
-  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=256',
-  'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&q=80&w=256',
-  'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=256',
-  'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=256',
-];
-
 export const EditProfileModal: React.FC<EditProfileModalProps> = ({
   patient,
   isOpen,
@@ -1311,7 +1302,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
-          {/* Profile Picture Upload & Presets Section */}
+          {/* Profile Picture Upload Section */}
           <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-3">
             <label className="block text-xs font-bold text-slate-700">
               {t.profilePicture || 'Profile Picture'}
@@ -1351,7 +1342,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
                     <button
                       type="button"
                       onClick={handleRemovePhoto}
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-rose-700 hover:bg-rose-50 text-xs font-semibold rounded-xl border border-rose-200 transition-colors"
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-rose-700 hover:bg-rose-50 text-xs font-semibold rounded-xl border border-rose-200 transition-colors cursor-pointer"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                       <span>Remove</span>
@@ -1361,29 +1352,6 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
                 <p className="text-[11px] text-slate-400">
                   JPG, PNG or WebP image. Stored securely with your profile.
                 </p>
-              </div>
-            </div>
-
-            {/* Quick Preset Avatars */}
-            <div className="pt-2 border-t border-slate-200/60">
-              <span className="text-[11px] font-semibold text-slate-500 block mb-2">
-                {t.chooseAvatar || 'Or choose preset avatar:'}
-              </span>
-              <div className="flex items-center gap-2.5 overflow-x-auto pb-1">
-                {PRESET_AVATARS.map((url, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => setProfilePicture(url)}
-                    className={`w-9 h-9 rounded-full overflow-hidden border-2 transition-all shrink-0 hover:scale-110 ${
-                      profilePicture === url
-                        ? 'border-teal-600 ring-2 ring-teal-500/30'
-                        : 'border-slate-200 hover:border-teal-400'
-                    }`}
-                  >
-                    <img src={url} alt={`Preset ${idx + 1}`} className="w-full h-full object-cover" />
-                  </button>
-                ))}
               </div>
             </div>
           </div>
