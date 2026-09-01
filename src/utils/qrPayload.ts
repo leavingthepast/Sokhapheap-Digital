@@ -105,15 +105,15 @@ export function parseCompactPatientPayload(encoded: string): Patient | null {
       id: c.i,
       name: c.n,
       email: c.e || `${c.n.toLowerCase().replace(/\s+/g, '')}@sokhapheap.kh`,
-      phone: c.p || '+855 12 345 678',
-      dob: c.d || '1998-05-14',
+      phone: c.p || '',
+      dob: c.d || '',
       gender: c.g || 'Female',
-      bloodType: c.b || 'B+',
-      profilePicture: c.pic || 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=256',
+      bloodType: c.b || 'Unknown',
+      profilePicture: c.pic || undefined,
       emergencyContact: c.em || {
-        name: 'Emergency Contact',
-        relationship: 'Family',
-        phone: '+855 12 999 888'
+        name: '',
+        relationship: '',
+        phone: ''
       },
       qrToken: c.t || 'SKP-TOK-VERIFIED',
       qrTokenCreatedAt: c.tc || new Date().toISOString(),
