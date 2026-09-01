@@ -1,0 +1,146 @@
+import { Patient } from '../types';
+import { CLOUD_DEPLOYED_URL } from './qrPayload';
+
+const API_BASE_URL = typeof window !== 'undefined' ? window.location.origin : CLOUD_DEPLOYED_URL;
+
+/**
+ * Resizes and compresses an image data URL to a clean, fast-loading web format
+ * suitable for cross-device syncing without hitting size limits.
+ */
+export async function compressImageForUpload(
+  dataUrl: string, 
+  maxDimension: number = 1000, 
+  quality: number = 0.8
+): Promise<string> {
+  // If already a remote URL, return directly
+  if (dataUrl.startsWith('http')) return dataUrl;
+  if (!dataUrl.startsWith('data:image')) return dataUrl;
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxDimension || height > maxDimension) {
+        if (width > height) {
+          height = Math.round((height * maxDimension) / width);
+          width = maxDimension;
+        } else {
+          width = Math.round((width * maxDimension) / height);
+          height = maxDimension;
+        }
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        return resolve(dataUrl);
+      }
+
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, width, height);
+      ctx.drawImage(img, 0, 0, width, height);
+
+      try {
+        const compressed = canvas.toDataURL('image/jpeg', quality);
+        resolve(compressed);
+      } catch {
+        resolve(dataUrl);
+      }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+/**
+ * Fetch patient from server by ID or token.
+ */
+export async function fetchPatientFromServer(idOrToken: string): Promise<Patient | null> {
+  try {
+    const endpoints = [
+      `/api/patients/${encodeURIComponent(idOrToken)}`,
+      `/api/patient?id=${encodeURIComponent(idOrToken)}`,
+      `/api/patient?token=${encodeURIComponent(idOrToken)}`,
+      `${CLOUD_DEPLOYED_URL}/api/patients/${encodeURIComponent(idOrToken)}`,
+      `${CLOUD_DEPLOYED_URL}/api/patient?token=${encodeURIComponent(idOrToken)}`
+    ];
+
+    for (const ep of endpoints) {
+      try {
+        const res = await fetch(ep, { headers: { Accept: 'application/json' } });
+        if (res.ok) {
+          const body = await res.json();
+          if (body && body.data) return body.data;
+          if (body && body.id) return body;
+        }
+      } catch {
+        // try next endpoint
+      }
+    }
+  } catch (e) {
+    console.warn('Could not fetch patient from server', e);
+  }
+  return null;
+}
+
+/**
+ * Save single patient (including newly uploaded documents) to server.
+ */
+export async function savePatientToServer(patient: Patient): Promise<boolean> {
+  try {
+    const endpoints = [
+      '/api/patient',
+      `${CLOUD_DEPLOYED_URL}/api/patient`
+    ];
+
+    for (const ep of endpoints) {
+      try {
+        const res = await fetch(ep, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patient),
+        });
+        if (res.ok) return true;
+      } catch {
+        // continue
+      }
+    }
+  } catch (e) {
+    console.warn('Could not save patient to server', e);
+  }
+  return false;
+}
+
+/**
+ * Batch sync patients with server.
+ */
+export async function syncPatientsWithServer(localPatients: Patient[]): Promise<Patient[]> {
+  try {
+    // 1. First push local patients to server
+    if (localPatients.length > 0) {
+      try {
+        await fetch('/api/patients/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ patients: localPatients }),
+        });
+      } catch {
+        // Ignore network errors in local dev
+      }
+    }
+
+    // 2. Fetch latest server patients
+    const res = await fetch('/api/patients');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data) && data.data.length > 0) {
+        return data.data;
+      }
+    }
+  } catch (e) {
+    console.warn('Server sync skipped, using local data', e);
+  }
+  return localPatients;
+}

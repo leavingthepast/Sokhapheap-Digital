@@ -1,0 +1,8 @@
+{
+  "name": "Sokhapheap Digital Health",
+  "description": "Personal Digital Health Record platform — Your health history, in one secure place.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
