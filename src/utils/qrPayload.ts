@@ -182,5 +182,12 @@ export function parseCompactPatientPayload(encoded: string): Patient | null {
  */
 export function generateDoctorScanUrl(patient: Patient, customBase?: string): string {
   const baseUrl = getQRBaseUrl(customBase);
+  const compact = createCompactPatientPayload(patient);
+  
+  // If compact payload fits comfortably within standard QR matrix capacity (<1200 chars), append pdata for instant zero-latency loading
+  if (compact && compact.length < 1200) {
+    return `${baseUrl}?view=doctor_portal&token=${encodeURIComponent(patient.qrToken)}&id=${encodeURIComponent(patient.id)}&pdata=${compact}#doctor_portal`;
+  }
+
   return `${baseUrl}?view=doctor_portal&token=${encodeURIComponent(patient.qrToken)}&id=${encodeURIComponent(patient.id)}#doctor_portal`;
 }

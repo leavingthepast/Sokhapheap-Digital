@@ -98,22 +98,16 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
 
   if (error || pages.length === 0) {
     return (
-      <div className={`w-full flex flex-col items-center justify-center p-6 bg-rose-50/60 rounded-2xl border border-rose-200 min-h-[220px] text-center ${className}`}>
-        <AlertCircle className="w-8 h-8 text-rose-500 mb-2" />
-        <span className="text-xs font-bold text-rose-900 mb-1">{error || 'Unable to preview PDF.'}</span>
-        <p className="text-[11px] text-slate-600 max-w-sm mb-4">
-          You can still download or open the file directly in your browser's native viewer.
-        </p>
-        <div className="flex items-center gap-2">
-          <a
-            href={pdfUrl}
-            download={fileName}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-300 hover:bg-rose-50 text-rose-800 text-xs font-bold rounded-xl shadow-2xs transition-colors"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Download File</span>
-          </a>
+      <div className={`w-full flex flex-col items-center justify-center p-2 sm:p-4 bg-white rounded-2xl border border-slate-300 shadow-md ${className}`}>
+        <div className="w-full flex items-center justify-between px-3 py-2 bg-slate-100 rounded-t-xl border-b border-slate-200 text-xs font-bold text-slate-700">
+          <span className="truncate">{fileName}</span>
+          <span className="text-[10px] bg-teal-100 text-teal-800 px-2 py-0.5 rounded">In-Browser Viewer</span>
         </div>
+        <iframe
+          src={pdfUrl}
+          title={fileName}
+          className="w-full h-[65vh] rounded-b-xl border-0 bg-white"
+        />
       </div>
     );
   }

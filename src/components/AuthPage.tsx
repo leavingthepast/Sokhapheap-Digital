@@ -10,7 +10,9 @@ import {
   CheckCircle2, 
   RefreshCw, 
   Inbox,
-  Sparkles
+  Sparkles,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { Patient } from '../types';
 import { useLanguage } from '../context/LanguageContext';
@@ -42,6 +44,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [unverifiedEmail, setUnverifiedEmail] = useState<string>(initialVerifyEmail || '');
   const [localError, setLocalError] = useState<string | null>(null);
   const [localLoading, setLocalLoading] = useState(false);
@@ -303,14 +306,28 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                   <div className="relative">
                     <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
-                      type="password"
+                      id="auth-password-input"
+                      type={showPassword ? 'text' : 'password'}
                       required
                       minLength={6}
                       placeholder="••••••••"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      className="w-full pl-10 pr-4 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600 outline-hidden transition-all"
+                      className="w-full pl-10 pr-10 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600 outline-hidden transition-all"
                     />
+                    <button
+                      type="button"
+                      id="toggle-password-visibility-btn"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 rounded-md transition-colors cursor-pointer"
+                      title={showPassword ? 'Hide password' : 'View password'}
+                    >
+                      {showPassword ? (
+                        <EyeOff className="w-4 h-4" />
+                      ) : (
+                        <Eye className="w-4 h-4" />
+                      )}
+                    </button>
                   </div>
                   {authMode === 'signup' && (
                     <span className="text-[10px] text-slate-400 mt-1 block">

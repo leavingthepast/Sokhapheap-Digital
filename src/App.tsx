@@ -318,7 +318,23 @@ function DashboardContent() {
     }
   }, [patients]);
 
-  const currentPatient = patients.find((p) => p.email === activeEmail) || patients[0] || INITIAL_PATIENTS[0];
+  const currentPatient = useMemo(() => {
+    if (isDoctorViewOpen || initialScanContext.isDoctorView) {
+      if (initialScanContext.scannedPatient) {
+        const found = patients.find(p => p.id === initialScanContext.scannedPatient!.id);
+        if (found) return found;
+        return initialScanContext.scannedPatient;
+      }
+      if (initialScanContext.targetPatientId || initialScanContext.targetToken) {
+        const found = patients.find(
+          p => (initialScanContext.targetPatientId && p.id === initialScanContext.targetPatientId) ||
+               (initialScanContext.targetToken && p.qrToken === initialScanContext.targetToken)
+        );
+        if (found) return found;
+      }
+    }
+    return patients.find((p) => p.email === activeEmail) || patients[0] || INITIAL_PATIENTS[0];
+  }, [patients, activeEmail, isDoctorViewOpen, initialScanContext]);
 
   // Real-time Firestore sync listener for active patient
   useEffect(() => {
