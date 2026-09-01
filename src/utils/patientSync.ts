@@ -1,5 +1,11 @@
 import { Patient } from '../types';
 import { CLOUD_DEPLOYED_URL } from './qrPayload';
+import { 
+  pushPatientToFirestore, 
+  fetchPatientFromFirestore, 
+  fetchAllPatientsFromFirestore,
+  pushAllPatientsToFirestore 
+} from './firestoreService';
 
 const API_BASE_URL = typeof window !== 'undefined' ? window.location.origin : CLOUD_DEPLOYED_URL;
 
@@ -55,10 +61,17 @@ export async function compressImageForUpload(
 }
 
 /**
- * Fetch patient from server by ID or token.
+ * Fetch patient from Cloud Firestore or fallback API server by ID, token or email.
  */
 export async function fetchPatientFromServer(idOrToken: string): Promise<Patient | null> {
   try {
+    // 1. Try Cloud Firestore first
+    const firestorePatient = await fetchPatientFromFirestore(idOrToken);
+    if (firestorePatient) {
+      return firestorePatient;
+    }
+
+    // 2. Fallback to API endpoints
     const endpoints = [
       `/api/patients/${encodeURIComponent(idOrToken)}`,
       `/api/patient?id=${encodeURIComponent(idOrToken)}`,
@@ -86,10 +99,20 @@ export async function fetchPatientFromServer(idOrToken: string): Promise<Patient
 }
 
 /**
- * Save single patient (including newly uploaded documents) to server.
+ * Save single patient (including newly uploaded documents) to Cloud Firestore and server.
  */
-export async function savePatientToServer(patient: Patient): Promise<boolean> {
+export async function savePatientToServer(patient: Patient, userUid?: string): Promise<boolean> {
+  let firestoreSuccess = false;
   try {
+    // 1. Push to Cloud Firestore
+    const res = await pushPatientToFirestore(patient, userUid);
+    firestoreSuccess = res.success;
+  } catch (e) {
+    console.warn('Firestore direct push error:', e);
+  }
+
+  try {
+    // 2. Also push to API backend
     const endpoints = [
       '/api/patient',
       `${CLOUD_DEPLOYED_URL}/api/patient`
@@ -110,16 +133,18 @@ export async function savePatientToServer(patient: Patient): Promise<boolean> {
   } catch (e) {
     console.warn('Could not save patient to server', e);
   }
-  return false;
+  return firestoreSuccess;
 }
 
 /**
- * Batch sync patients with server.
+ * Batch sync patients with Cloud Firestore and server.
  */
-export async function syncPatientsWithServer(localPatients: Patient[]): Promise<Patient[]> {
+export async function syncPatientsWithServer(localPatients: Patient[], userUid?: string): Promise<Patient[]> {
   try {
-    // 1. First push local patients to server
+    // 1. First push local patients to Firestore
     if (localPatients.length > 0) {
+      await pushAllPatientsToFirestore(localPatients, userUid).catch(() => {});
+      
       try {
         await fetch('/api/patients/sync', {
           method: 'POST',
@@ -131,7 +156,21 @@ export async function syncPatientsWithServer(localPatients: Patient[]): Promise<
       }
     }
 
-    // 2. Fetch latest server patients
+    // 2. Fetch latest patients from Firestore
+    const firestorePatients = await fetchAllPatientsFromFirestore();
+    if (firestorePatients.length > 0) {
+      // Merge with local records
+      const mergedMap = new Map<string, Patient>();
+      for (const p of localPatients) {
+        mergedMap.set(p.id, p);
+      }
+      for (const p of firestorePatients) {
+        mergedMap.set(p.id, p);
+      }
+      return Array.from(mergedMap.values());
+    }
+
+    // 3. Fallback to API backend
     const res = await fetch('/api/patients');
     if (res.ok) {
       const data = await res.json();

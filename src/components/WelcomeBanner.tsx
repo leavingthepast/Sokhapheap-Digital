@@ -1,5 +1,5 @@
-import React from 'react';
-import { ShieldCheck, FileText, QrCode, UserPen, Phone, Calendar } from 'lucide-react';
+import React, { useState } from 'react';
+import { ShieldCheck, FileText, QrCode, UserPen, Phone, Cloud, CloudCheck, RefreshCw } from 'lucide-react';
 import { Patient } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 
@@ -8,6 +8,7 @@ interface WelcomeBannerProps {
   onOpenPdf: () => void;
   onOpenQrTab: () => void;
   onEditProfile: () => void;
+  onPushToFirestore?: () => Promise<boolean>;
 }
 
 export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
@@ -15,9 +16,27 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
   onOpenPdf,
   onOpenQrTab,
   onEditProfile,
+  onPushToFirestore,
 }) => {
   const { t } = useLanguage();
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncSuccess, setSyncSuccess] = useState(false);
   const initial = patient.name ? patient.name.charAt(0).toUpperCase() : 'P';
+
+  const handleManualSync = async () => {
+    if (!onPushToFirestore || isSyncing) return;
+    setIsSyncing(true);
+    setSyncSuccess(false);
+    try {
+      const ok = await onPushToFirestore();
+      if (ok) {
+        setSyncSuccess(true);
+        setTimeout(() => setSyncSuccess(false), 3500);
+      }
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   return (
     <div 
@@ -75,11 +94,32 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
               </button>
             </div>
 
-            {/* Secondary Patient Metadata (Phone, ID, Secure Storage) */}
+            {/* Secondary Patient Metadata (Phone, ID, Firestore Sync Status) */}
             <div className="flex flex-wrap items-center gap-2 sm:gap-3 pt-1.5">
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white/15 backdrop-blur-xs text-xs font-medium text-white border border-white/20">
-                <ShieldCheck className="w-3.5 h-3.5 text-teal-200" />
-                <span>{t.secureStorageNote}</span>
+              <div 
+                onClick={handleManualSync}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border backdrop-blur-xs cursor-pointer transition-all ${
+                  syncSuccess 
+                    ? 'bg-emerald-500/30 border-emerald-300 text-emerald-100' 
+                    : 'bg-white/15 hover:bg-white/25 border-white/20 text-white'
+                }`}
+                title="Click to push and sync latest data with Cloud Firestore"
+              >
+                {isSyncing ? (
+                  <RefreshCw className="w-3.5 h-3.5 text-teal-200 animate-spin" />
+                ) : syncSuccess ? (
+                  <CloudCheck className="w-3.5 h-3.5 text-emerald-300" />
+                ) : (
+                  <Cloud className="w-3.5 h-3.5 text-teal-200" />
+                )}
+                <span>
+                  {isSyncing 
+                    ? (t.syncingFirestore || 'Syncing...') 
+                    : syncSuccess 
+                    ? (t.firestoreSyncSuccess || 'Firestore Synced!') 
+                    : (t.firestoreSynced || 'Firestore Synced')}
+                </span>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
               </div>
 
               {patient.phone && (
@@ -101,7 +141,7 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
           <button
             id="banner-generate-pdf-btn"
             onClick={onOpenPdf}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-white text-teal-800 hover:bg-teal-50 text-sm font-semibold rounded-xl shadow-xs hover:shadow transition-all group"
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-white text-teal-800 hover:bg-teal-50 text-sm font-semibold rounded-xl shadow-xs hover:shadow transition-all group cursor-pointer"
           >
             <FileText className="w-4 h-4 text-teal-600 group-hover:scale-105 transition-transform" />
             <span>{t.generateMedicalPdf}</span>
@@ -110,7 +150,7 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
           <button
             id="banner-view-qr-btn"
             onClick={onOpenQrTab}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-white/15 hover:bg-white/25 text-white text-sm font-semibold rounded-xl border border-white/30 backdrop-blur-xs transition-all"
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-white/15 hover:bg-white/25 text-white text-sm font-semibold rounded-xl border border-white/30 backdrop-blur-xs transition-all cursor-pointer"
           >
             <QrCode className="w-4 h-4 text-teal-100" />
             <span>{t.showQrCode}</span>

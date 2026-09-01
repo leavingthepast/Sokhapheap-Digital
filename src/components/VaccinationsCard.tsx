@@ -5,18 +5,27 @@ import { useLanguage } from '../context/LanguageContext';
 
 interface VaccinationsCardProps {
   vaccinations: Vaccination[];
-  onAddVaccination: () => void;
-  onEditVaccination: (vaccine: Vaccination) => void;
-  onDeleteVaccination: (id: string) => void;
+  onAdd?: () => void;
+  onAddVaccination?: () => void;
+  onEdit?: (vaccine: Vaccination) => void;
+  onEditVaccination?: (vaccine: Vaccination) => void;
+  onDelete?: (id: string) => void;
+  onDeleteVaccination?: (id: string) => void;
 }
 
 export const VaccinationsCard: React.FC<VaccinationsCardProps> = ({
   vaccinations,
+  onAdd,
   onAddVaccination,
+  onEdit,
   onEditVaccination,
+  onDelete,
   onDeleteVaccination,
 }) => {
   const { t } = useLanguage();
+  const handleAdd = onAdd || onAddVaccination;
+  const handleEdit = onEdit || onEditVaccination;
+  const handleDelete = onDelete || onDeleteVaccination;
 
   return (
     <div 
@@ -32,8 +41,8 @@ export const VaccinationsCard: React.FC<VaccinationsCardProps> = ({
         </div>
         <button
           id="add-vaccination-btn"
-          onClick={onAddVaccination}
-          className="text-xs font-semibold text-teal-700 hover:text-teal-900 px-2 py-1 rounded-md hover:bg-teal-50 transition-colors flex items-center gap-1"
+          onClick={handleAdd}
+          className="text-xs font-semibold text-teal-700 hover:text-teal-900 px-2 py-1 rounded-md hover:bg-teal-50 transition-colors flex items-center gap-1 cursor-pointer"
         >
           <Plus className="w-3.5 h-3.5" />
           <span>{t.addVaccination}</span>
@@ -77,15 +86,15 @@ export const VaccinationsCard: React.FC<VaccinationsCardProps> = ({
 
               <div className="flex items-center gap-1 opacity-80 sm:opacity-0 group-hover:opacity-100 transition-opacity ml-2">
                 <button
-                  onClick={() => onEditVaccination(vac)}
-                  className="p-1 text-slate-400 hover:text-teal-700 rounded hover:bg-slate-200/60"
+                  onClick={() => handleEdit && handleEdit(vac)}
+                  className="p-1 text-slate-400 hover:text-teal-700 rounded hover:bg-slate-200/60 cursor-pointer"
                   title="Edit vaccination"
                 >
                   <Edit2 className="w-3.5 h-3.5" />
                 </button>
                 <button
-                  onClick={() => onDeleteVaccination(vac.id)}
-                  className="p-1 text-slate-400 hover:text-rose-600 rounded hover:bg-slate-200/60"
+                  onClick={() => handleDelete && handleDelete(vac.id)}
+                  className="p-1 text-slate-400 hover:text-rose-600 rounded hover:bg-slate-200/60 cursor-pointer"
                   title="Delete vaccination"
                 >
                   <Trash2 className="w-3.5 h-3.5" />

@@ -5,18 +5,27 @@ import { useLanguage } from '../context/LanguageContext';
 
 interface AllergiesCardProps {
   allergies: Allergy[];
-  onAddAllergy: () => void;
-  onEditAllergy: (allergy: Allergy) => void;
-  onDeleteAllergy: (id: string) => void;
+  onAdd?: () => void;
+  onAddAllergy?: () => void;
+  onEdit?: (allergy: Allergy) => void;
+  onEditAllergy?: (allergy: Allergy) => void;
+  onDelete?: (id: string) => void;
+  onDeleteAllergy?: (id: string) => void;
 }
 
 export const AllergiesCard: React.FC<AllergiesCardProps> = ({
   allergies,
+  onAdd,
   onAddAllergy,
+  onEdit,
   onEditAllergy,
+  onDelete,
   onDeleteAllergy,
 }) => {
   const { t } = useLanguage();
+  const handleAdd = onAdd || onAddAllergy;
+  const handleEdit = onEdit || onEditAllergy;
+  const handleDelete = onDelete || onDeleteAllergy;
 
   return (
     <div 
@@ -32,8 +41,8 @@ export const AllergiesCard: React.FC<AllergiesCardProps> = ({
         </div>
         <button
           id="add-allergy-btn"
-          onClick={onAddAllergy}
-          className="text-xs font-semibold text-teal-700 hover:text-teal-900 px-2 py-1 rounded-md hover:bg-teal-50 transition-colors flex items-center gap-1"
+          onClick={handleAdd}
+          className="text-xs font-semibold text-teal-700 hover:text-teal-900 px-2 py-1 rounded-md hover:bg-teal-50 transition-colors flex items-center gap-1 cursor-pointer"
         >
           <Plus className="w-3.5 h-3.5" />
           <span>{t.addAllergy}</span>
@@ -77,15 +86,15 @@ export const AllergiesCard: React.FC<AllergiesCardProps> = ({
 
               <div className="flex items-center gap-1 opacity-80 sm:opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
-                  onClick={() => onEditAllergy(allergy)}
-                  className="p-1 text-slate-400 hover:text-teal-700 rounded hover:bg-slate-200/60"
+                  onClick={() => handleEdit && handleEdit(allergy)}
+                  className="p-1 text-slate-400 hover:text-teal-700 rounded hover:bg-slate-200/60 cursor-pointer"
                   title="Edit allergy"
                 >
                   <Edit2 className="w-3.5 h-3.5" />
                 </button>
                 <button
-                  onClick={() => onDeleteAllergy(allergy.id)}
-                  className="p-1 text-slate-400 hover:text-rose-600 rounded hover:bg-slate-200/60"
+                  onClick={() => handleDelete && handleDelete(allergy.id)}
+                  className="p-1 text-slate-400 hover:text-rose-600 rounded hover:bg-slate-200/60 cursor-pointer"
                   title="Delete allergy"
                 >
                   <Trash2 className="w-3.5 h-3.5" />

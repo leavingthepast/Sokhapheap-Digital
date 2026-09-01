@@ -197,7 +197,12 @@ export const TRANSLATIONS = {
     qrSecurityDesc: 'The QR code contains a secure cryptographic reference token rather than readable medical data.',
     revocationHeader: 'One-Click Revocation:',
     revocationDesc: 'Patients can instantly revoke previous QR tokens if a phone is lost or shared access expires.',
-    authIntegrationHeader: 'Firebase Authentication Protected',
+    authIntegrationHeader: 'Firebase Authentication & Firestore Sync',
+    firestoreSynced: 'Firestore Synced',
+    pushToFirestore: 'Push to Firestore',
+    syncingFirestore: 'Syncing to Firestore...',
+    firestoreSyncSuccess: 'Data successfully pushed to Cloud Firestore!',
+    cloudSyncTitle: 'Cloud Firestore Realtime Sync',
   },
 
   km: {
@@ -396,6 +401,11 @@ export const TRANSLATIONS = {
     qrSecurityDesc: 'កូដ QR ផ្ទុកត្រឹមតែកូដសម្ងាត់បណ្ដោះអាសន្ន មិនផ្ទុកទិន្នន័យជំងឺច្បាស់ឡើយ។',
     revocationHeader: 'ការលុបចោលកូដចាស់ភ្លាមៗ៖',
     revocationDesc: 'អ្នកជំងឺអាចផ្លាស់ប្ដូរកូដ QR ថ្មីបានគ្រប់ពេល ដើម្បីការពារឯកជនភាព។',
-    authIntegrationHeader: 'ប្រព័ន្ធផ្ទៀងផ្ទាត់សុវត្ថិភាព Firebase Auth',
+    authIntegrationHeader: 'ប្រព័ន្ធផ្ទៀងផ្ទាត់ Firebase Auth & Firestore Sync',
+    firestoreSynced: 'បានធ្វើសមកាលកម្មជាមួយ Firestore',
+    pushToFirestore: 'រុញទិន្នន័យទៅកាន់ Firestore',
+    syncingFirestore: 'កំពុងធ្វើសមកាលកម្ម...',
+    firestoreSyncSuccess: 'ទិន្នន័យត្រូវបានរុញទៅកាន់ Cloud Firestore ដោយជោគជ័យ!',
+    cloudSyncTitle: 'ការធ្វើសមកាលកម្មផ្ទាល់ជាមួយ Cloud Firestore',
   },
 };

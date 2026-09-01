@@ -9,10 +9,17 @@ import { Patient, BloodType, Allergy, Vaccination, MedicalRecord } from './types
 import { parseCompactPatientPayload } from './utils/qrPayload';
 import { fetchPatientFromServer, savePatientToServer, syncPatientsWithServer } from './utils/patientSync';
 import { 
+  pushPatientToFirestore, 
+  pushAllPatientsToFirestore, 
+  subscribeToPatientFirestore 
+} from './utils/firestoreService';
+import { 
   auth, 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
   signInWithPopup, 
+  signInWithRedirect,
+  getRedirectResult,
   googleProvider, 
   signOut, 
   onAuthStateChanged,
@@ -103,6 +110,16 @@ function formatFirebaseAuthError(error: any): string {
       return 'Please enter a valid email address.';
     case 'auth/popup-closed-by-user':
       return 'Google sign-in popup was closed before completion.';
+    case 'auth/cancelled-popup-request':
+      return 'Google sign-in was cancelled.';
+    case 'auth/popup-blocked':
+      return 'Google sign-in popup was blocked by your browser. Attempting direct redirect...';
+    case 'auth/unauthorized-domain':
+      return 'This domain is not authorized in Firebase Console. Please ensure your domain is added under Firebase Authentication > Settings > Authorized domains.';
+    case 'auth/operation-not-allowed':
+      return 'Google Sign-In is not enabled in Firebase Console. Please enable Google in Authentication > Sign-in method.';
+    case 'auth/account-exists-with-different-credential':
+      return 'An account already exists with this email using a different sign-in method.';
     case 'auth/network-request-failed':
       return 'Network connection issue. Please check your internet connection.';
     default:
@@ -162,8 +179,15 @@ function DashboardContent() {
   const [initialUploadFile, setInitialUploadFile] = useState<File | null>(null);
   const [viewerRecord, setViewerRecord] = useState<MedicalRecord | null>(null);
 
-  // Listen to Firebase Auth state changes
+  // Listen to Firebase Auth state changes and handle redirect auth result
   useEffect(() => {
+    // Process redirect result if page was reloaded after signInWithRedirect
+    getRedirectResult(auth).catch((err) => {
+      if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
+        console.warn('Firebase redirect result info:', err);
+      }
+    });
+
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user);
       // Only auto-login if email is verified (e.g. Google auth or verified email)
@@ -296,10 +320,55 @@ function DashboardContent() {
 
   const currentPatient = patients.find((p) => p.email === activeEmail) || patients[0] || INITIAL_PATIENTS[0];
 
-  const updateCurrentPatient = (updater: (prev: Patient) => Patient) => {
-    setPatients((prev) =>
-      prev.map((p) => (p.id === currentPatient.id ? updater(p) : p))
+  // Real-time Firestore sync listener for active patient
+  useEffect(() => {
+    if (!currentPatient?.id) return;
+    
+    // Subscribe to real-time changes from Cloud Firestore
+    const unsubscribe = subscribeToPatientFirestore(
+      currentPatient.id,
+      (updatedPatient) => {
+        if (updatedPatient && updatedPatient.id === currentPatient.id) {
+          setPatients((prev) => {
+            const idx = prev.findIndex((p) => p.id === updatedPatient.id);
+            if (idx >= 0) {
+              const copy = [...prev];
+              copy[idx] = updatedPatient;
+              return copy;
+            }
+            return [updatedPatient, ...prev];
+          });
+        }
+      }
     );
+
+    return () => unsubscribe();
+  }, [currentPatient?.id]);
+
+  const handlePushToFirestore = async (): Promise<boolean> => {
+    try {
+      const res = await pushPatientToFirestore(currentPatient, currentUser?.uid);
+      if (res.success) {
+        // Also push all other demo/cached patients in background
+        pushAllPatientsToFirestore(patients, currentUser?.uid).catch(() => {});
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  };
+
+  const updateCurrentPatient = (updater: (prev: Patient) => Patient) => {
+    setPatients((prev) => {
+      const updated = prev.map((p) => (p.id === currentPatient.id ? updater(p) : p));
+      const target = updated.find((p) => p.id === currentPatient.id);
+      if (target) {
+        // Automatically push updated record to Firestore
+        pushPatientToFirestore(target, currentUser?.uid).catch(() => {});
+      }
+      return updated;
+    });
   };
 
   // Auth actions with Firebase Authentication
@@ -428,8 +497,19 @@ function DashboardContent() {
     setAuthError(null);
     setIsAuthLoading(true);
     try {
-      const res = await signInWithPopup(auth, googleProvider);
-      const user = res.user;
+      let user: FirebaseUser | null = null;
+      try {
+        const res = await signInWithPopup(auth, googleProvider);
+        user = res.user;
+      } catch (popupErr: any) {
+        if (popupErr?.code === 'auth/popup-blocked') {
+          // If popup is blocked by browser or iframe constraints, try redirect
+          await signInWithRedirect(auth, googleProvider);
+          return;
+        }
+        throw popupErr;
+      }
+
       if (user && user.email) {
         const email = user.email.toLowerCase();
         setActiveEmail(email);
@@ -442,8 +522,8 @@ function DashboardContent() {
               p.email.toLowerCase() === email
                 ? {
                     ...p,
-                    name: user.displayName || p.name,
-                    profilePicture: user.photoURL || p.profilePicture,
+                    name: user!.displayName || p.name,
+                    profilePicture: user!.photoURL || p.profilePicture,
                   }
                 : p
             );
@@ -614,7 +694,6 @@ function DashboardContent() {
         onLogin={handleLogin}
         onCreateAccount={handleCreateAccount}
         onResendVerification={handleResendVerification}
-        onGoogleSignIn={handleGoogleSignIn}
         availablePatients={patients}
         authError={authError}
         isLoading={isAuthLoading}
@@ -646,6 +725,7 @@ function DashboardContent() {
               onOpenPdf={() => setIsPdfViewOpen(true)}
               onOpenQrTab={() => setActiveTab('qrcode')}
               onEditProfile={() => setEditProfileModalOpen(true)}
+              onPushToFirestore={handlePushToFirestore}
             />
 
             {/* 4 Health Information Cards Layout matching presentation & screenshot */}

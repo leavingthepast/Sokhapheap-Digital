@@ -18,14 +18,14 @@ export const LanguageSwitcher: React.FC<LanguageSwitcherProps> = ({ variant = 'h
         type="button"
         id="switch-lang-km-btn"
         onClick={() => setLang('km')}
-        className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg transition-all ${
+        className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
           lang === 'km'
             ? 'bg-teal-700 text-white shadow-xs'
             : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
         }`}
         title="ប្តូរទៅភាសាខ្មែរ (Khmer)"
       >
-        <span className="text-sm">🇰🇭</span>
+        <span className="font-extrabold text-[11px] tracking-tight">KH</span>
         <span>ខ្មែរ</span>
       </button>
 
@@ -33,14 +33,14 @@ export const LanguageSwitcher: React.FC<LanguageSwitcherProps> = ({ variant = 'h
         type="button"
         id="switch-lang-en-btn"
         onClick={() => setLang('en')}
-        className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg transition-all ${
+        className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
           lang === 'en'
             ? 'bg-teal-700 text-white shadow-xs'
             : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
         }`}
         title="Switch to English"
       >
-        <span className="text-sm">🇬🇧</span>
+        <span className="font-extrabold text-[11px] tracking-tight">EN</span>
         <span>English</span>
       </button>
     </div>

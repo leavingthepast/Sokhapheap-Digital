@@ -4,6 +4,8 @@ import {
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
   signInWithPopup, 
+  signInWithRedirect,
+  getRedirectResult,
   GoogleAuthProvider, 
   signOut, 
   onAuthStateChanged,
@@ -11,6 +13,21 @@ import {
   sendEmailVerification,
   User
 } from "firebase/auth";
+import {
+  getFirestore,
+  collection,
+  doc,
+  setDoc,
+  getDoc,
+  getDocs,
+  onSnapshot,
+  updateDoc,
+  deleteDoc,
+  query,
+  where,
+  serverTimestamp,
+  Firestore
+} from "firebase/firestore";
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
@@ -25,16 +42,36 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+export const db = getFirestore(app);
+
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({
+  prompt: 'select_account'
+});
+googleProvider.addScope('email');
+googleProvider.addScope('profile');
 
 export {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   signOut,
   onAuthStateChanged,
   updateProfile,
-  sendEmailVerification
+  sendEmailVerification,
+  collection,
+  doc,
+  setDoc,
+  getDoc,
+  getDocs,
+  onSnapshot,
+  updateDoc,
+  deleteDoc,
+  query,
+  where,
+  serverTimestamp
 };
-export type { User };
+export type { User, Firestore };
 
