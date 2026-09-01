@@ -24,7 +24,6 @@ import {
   signOut, 
   onAuthStateChanged,
   updateProfile,
-  sendEmailVerification,
   User as FirebaseUser
 } from './firebase';
 import { Navbar } from './components/Navbar';
@@ -190,8 +189,7 @@ function DashboardContent() {
 
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user);
-      // Only auto-login if email is verified (e.g. Google auth or verified email)
-      if (user && user.email && user.emailVerified) {
+      if (user && user.email) {
         const email = user.email.toLowerCase();
         setActiveEmail(email);
         localStorage.setItem(STORAGE_KEY_ACTIVE_USER, email);
@@ -412,19 +410,39 @@ function DashboardContent() {
         }
       }
 
-      // If email is not verified, block login and show verification screen
-      if (userCred && userCred.user) {
-        const isDemo = email.toLowerCase() === 'patient@sokhapheap.kh';
-        if (!userCred.user.emailVerified && !isDemo) {
-          await signOut(auth);
-          setActiveEmail(null);
-          localStorage.removeItem(STORAGE_KEY_ACTIVE_USER);
-          return { unverified: true, email: userCred.user.email?.toLowerCase() || email.toLowerCase() };
-        }
-      }
+      const lowerEmail = email.toLowerCase();
+      setActiveEmail(lowerEmail);
+      localStorage.setItem(STORAGE_KEY_ACTIVE_USER, lowerEmail);
 
-      setActiveEmail(email.toLowerCase());
-      localStorage.setItem(STORAGE_KEY_ACTIVE_USER, email.toLowerCase());
+      // Ensure patient record exists in state
+      setPatients((prev) => {
+        const existing = prev.find((p) => p.email.toLowerCase() === lowerEmail);
+        if (existing) return prev;
+        const newPatient: Patient = {
+          id: `SKP-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+          name: userCred?.user?.displayName || lowerEmail.split('@')[0] || 'Patient',
+          email: lowerEmail,
+          dob: '',
+          gender: 'Female',
+          phone: userCred?.user?.phoneNumber || '',
+          profilePicture: userCred?.user?.photoURL || undefined,
+          emergencyContact: {
+            name: '',
+            relationship: '',
+            phone: '',
+          },
+          bloodType: 'Unknown',
+          allergies: [],
+          vaccinations: [],
+          medicalRecords: [],
+          illnessHistory: [],
+          labResults: [],
+          qrToken: `SKP-TOK-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
+          qrTokenCreatedAt: new Date().toISOString(),
+        };
+        return [newPatient, ...prev];
+      });
+
       setActiveTab('overview');
     } catch (err: any) {
       const formatted = formatFirebaseAuthError(err);
@@ -444,20 +462,14 @@ function DashboardContent() {
         await updateProfile(res.user, { displayName: name });
       }
 
-      // Send verification email
-      if (res.user) {
-        await sendEmailVerification(res.user);
-      }
-
-      // Don't auto-login after Sign Up
-      await signOut(auth);
-      setActiveEmail(null);
-      localStorage.removeItem(STORAGE_KEY_ACTIVE_USER);
+      const lowerEmail = email.toLowerCase();
+      setActiveEmail(lowerEmail);
+      localStorage.setItem(STORAGE_KEY_ACTIVE_USER, lowerEmail);
 
       const newPatient: Patient = {
         id: `SKP-2026-${Math.floor(1000 + Math.random() * 9000)}`,
         name,
-        email: email.toLowerCase(),
+        email: lowerEmail,
         dob: '',
         gender: 'Female',
         phone: '',
@@ -478,34 +490,13 @@ function DashboardContent() {
       };
 
       setPatients((prev) => [newPatient, ...prev]);
-      
-      // Return unverified flag to show verification screen
-      return { unverified: true, email: email.toLowerCase() };
+      setActiveTab('overview');
     } catch (err: any) {
       const formatted = formatFirebaseAuthError(err);
       setAuthError(formatted);
       throw new Error(formatted);
     } finally {
       setIsAuthLoading(false);
-    }
-  };
-
-  const handleResendVerification = async (email: string, password = 'password123') => {
-    setAuthError(null);
-    try {
-      if (auth.currentUser && auth.currentUser.email?.toLowerCase() === email.toLowerCase()) {
-        await sendEmailVerification(auth.currentUser);
-      } else {
-        const cred = await signInWithEmailAndPassword(auth, email, password);
-        if (cred.user) {
-          await sendEmailVerification(cred.user);
-        }
-        await signOut(auth);
-      }
-    } catch (err: any) {
-      const formatted = formatFirebaseAuthError(err);
-      setAuthError(formatted);
-      throw new Error(formatted);
     }
   };
 
@@ -709,7 +700,6 @@ function DashboardContent() {
       <AuthPage
         onLogin={handleLogin}
         onCreateAccount={handleCreateAccount}
-        onResendVerification={handleResendVerification}
         availablePatients={patients}
         authError={authError}
         isLoading={isAuthLoading}
