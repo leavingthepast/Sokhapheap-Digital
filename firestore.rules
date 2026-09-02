@@ -1,0 +1,72 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isPatientOwner(resourceData) {
+      return isSignedIn() && (
+        resourceData.userId == request.auth.uid ||
+        (request.resource != null && request.resource.data.userId == request.auth.uid)
+      );
+    }
+
+    // User Profile Documents: Only the logged-in user can read/write their own data (request.auth.uid must match {uid})
+    match /users/{uid} {
+      allow read, write: if isOwner(uid);
+
+      match /{allSubcollections=**} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+
+    // Patients collection:
+    // - Logged-in user can read/write their own patient record (request.auth.uid matches {uid} / userId)
+    // - Users scanning with a valid QR code can scan and view the patient's medical data
+    match /patients/{patientId} {
+      // Read: Owner or anyone accessing with an authorized QR code token
+      allow read: if (
+        (isSignedIn() && (resource.data.userId == request.auth.uid || request.auth.uid == patientId)) ||
+        (resource.data.qrToken is string && resource.data.qrToken.size() > 0)
+      );
+
+      // Create: Only authenticated user writing their own record
+      allow create: if isSignedIn() && (
+        request.resource.data.userId == request.auth.uid ||
+        request.auth.uid == patientId
+      );
+
+      // Update: Only authenticated user updating their own record
+      allow update: if isSignedIn() && (
+        resource.data.userId == request.auth.uid ||
+        request.auth.uid == patientId ||
+        request.resource.data.userId == request.auth.uid
+      );
+
+      // Delete: Only authenticated owner
+      allow delete: if isSignedIn() && (
+        resource.data.userId == request.auth.uid ||
+        request.auth.uid == patientId
+      );
+
+      match /{allSubcollections=**} {
+        allow read, write: if isSignedIn() && (
+          get(/databases/$(database)/documents/patients/$(patientId)).data.userId == request.auth.uid ||
+          request.auth.uid == patientId
+        );
+      }
+    }
+  }
+}

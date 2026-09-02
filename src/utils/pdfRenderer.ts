@@ -1,9 +1,13 @@
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Configure PDF.js worker
+// Configure PDF.js worker reliably across Safari and Chrome
 if (typeof window !== 'undefined') {
-  // Use unpkg or cdnjs or local worker for reliable bundling without worker loader issues
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version || '4.10.38'}/pdf.worker.min.mjs`;
+  try {
+    // Use worker from unpkg or cdnjs
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version || '4.10.38'}/pdf.worker.min.mjs`;
+  } catch (e) {
+    console.warn('PDF.js worker setup note:', e);
+  }
 }
 
 export interface RenderedPdfPage {
@@ -15,15 +19,19 @@ export interface RenderedPdfPage {
 
 /**
  * Render all or specific pages of a PDF from base64 dataUrl, ArrayBuffer, or URL into crisp image data URLs.
- * Works seamlessly on iOS Safari, Android Chrome, and all desktop browsers.
+ * Works seamlessly on iOS Safari, macOS Safari, Android Chrome, and Desktop Chrome.
  */
 export async function renderPdfToImages(
   pdfSource: string | ArrayBuffer,
-  maxPages = 10,
-  scale = 1.5
+  maxPages = 20,
+  scale = 2.0
 ): Promise<RenderedPdfPage[]> {
   try {
     let loadingTask;
+    const version = pdfjsLib.version || '4.10.38';
+    const cMapUrl = `https://unpkg.com/pdfjs-dist@${version}/cmaps/`;
+    const standardFontDataUrl = `https://unpkg.com/pdfjs-dist@${version}/standard_fonts/`;
+
     if (typeof pdfSource === 'string') {
       if (pdfSource.startsWith('data:')) {
         const base64Data = pdfSource.split(',')[1] || '';
@@ -32,12 +40,27 @@ export async function renderPdfToImages(
         for (let i = 0; i < binaryString.length; i++) {
           bytes[i] = binaryString.charCodeAt(i);
         }
-        loadingTask = pdfjsLib.getDocument({ data: bytes.buffer });
+        loadingTask = pdfjsLib.getDocument({
+          data: bytes.buffer,
+          cMapUrl,
+          cMapPacked: true,
+          standardFontDataUrl,
+        });
       } else {
-        loadingTask = pdfjsLib.getDocument({ url: pdfSource });
+        loadingTask = pdfjsLib.getDocument({
+          url: pdfSource,
+          cMapUrl,
+          cMapPacked: true,
+          standardFontDataUrl,
+        });
       }
     } else {
-      loadingTask = pdfjsLib.getDocument({ data: pdfSource });
+      loadingTask = pdfjsLib.getDocument({
+        data: pdfSource,
+        cMapUrl,
+        cMapPacked: true,
+        standardFontDataUrl,
+      });
     }
 
     const pdf = await loadingTask.promise;
@@ -61,7 +84,7 @@ export async function renderPdfToImages(
       };
 
       await page.render(renderContext).promise;
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
 
       pages.push({
         pageNumber: pageNum,

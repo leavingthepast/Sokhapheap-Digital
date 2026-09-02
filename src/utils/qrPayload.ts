@@ -6,14 +6,59 @@ export const CLOUD_DEPLOYED_URL = 'https://ais-pre-wun6t2kzqwnrzhf6l4uamt-349013
 export const CLOUD_DEV_URL = 'https://ais-dev-wun6t2kzqwnrzhf6l4uamt-34901302090.asia-southeast1.run.app';
 
 /**
+ * Robust UTF-8 to Base64 encoder working identically on Safari, Chrome, iOS & Android
+ */
+export function encodeUtf8Base64(str: string): string {
+  try {
+    const bytes = new TextEncoder().encode(str);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  } catch {
+    try {
+      return btoa(unescape(encodeURIComponent(str)));
+    } catch {
+      return '';
+    }
+  }
+}
+
+/**
+ * Robust Base64 to UTF-8 decoder working identically on Safari, Chrome, iOS & Android
+ */
+export function decodeUtf8Base64(base64: string): string {
+  try {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new TextDecoder().decode(bytes);
+  } catch {
+    try {
+      return decodeURIComponent(escape(atob(base64)));
+    } catch {
+      return base64;
+    }
+  }
+}
+
+/**
  * Determines the best base URL for QR codes so mobile devices can access it over the public internet.
  */
 export function getQRBaseUrl(customBase?: string): string {
-  if (customBase) return customBase;
+  if (customBase) return customBase.replace(/\/+$/, '');
 
   if (typeof window !== 'undefined') {
     const origin = window.location.origin;
-    const pathname = window.location.pathname;
+    let pathname = window.location.pathname;
+    if (pathname && pathname !== '/') {
+      pathname = pathname.replace(/\/+$/, '');
+    } else {
+      pathname = '';
+    }
 
     // If running on localhost or 127.0.0.1, external phones won't reach localhost, so use public deployed URL
     if (origin.includes('localhost') || origin.includes('127.0.0.1') || origin.includes('about:') || !origin.startsWith('http')) {
@@ -70,10 +115,8 @@ export function createCompactPatientPayload(patient: Patient): string {
 
   try {
     const jsonStr = JSON.stringify(compact);
-    if (typeof window !== 'undefined' && window.btoa) {
-      return encodeURIComponent(btoa(unescape(encodeURIComponent(jsonStr))));
-    }
-    return encodeURIComponent(jsonStr);
+    const encodedB64 = encodeUtf8Base64(jsonStr);
+    return encodeURIComponent(encodedB64);
   } catch (e) {
     console.warn('Failed to encode compact patient payload', e);
     return '';
@@ -88,17 +131,25 @@ export function parseCompactPatientPayload(encoded: string): Patient | null {
     let jsonStr = '';
     const decodedUri = decodeURIComponent(encoded);
     
-    if (typeof window !== 'undefined' && window.atob) {
-      try {
-        jsonStr = decodeURIComponent(escape(atob(decodedUri)));
-      } catch {
-        jsonStr = decodedUri;
-      }
-    } else {
+    // Attempt decoding as base64 UTF-8
+    try {
+      jsonStr = decodeUtf8Base64(decodedUri);
+    } catch {
       jsonStr = decodedUri;
     }
 
-    const c = JSON.parse(jsonStr);
+    let c: any = null;
+    try {
+      c = JSON.parse(jsonStr);
+    } catch {
+      // If parsing failed, try direct JSON parse of decodedUri in case it wasn't base64
+      try {
+        c = JSON.parse(decodedUri);
+      } catch {
+        return null;
+      }
+    }
+
     if (!c || !c.i || !c.n) return null;
 
     const patient: Patient = {

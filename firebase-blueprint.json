@@ -1,0 +1,54 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and authentication identity",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "format": "email", "description": "User email address" },
+        "name": { "type": "string", "description": "Display name of the user" },
+        "phone": { "type": "string", "description": "Phone number" },
+        "createdAt": { "type": "string", "description": "Account creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Last updated timestamp" }
+      },
+      "required": ["email"]
+    },
+    "Patient": {
+      "title": "Patient",
+      "description": "Patient medical record, emergency metadata, and digital health history",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique Patient Identification Number" },
+        "userId": { "type": "string", "description": "Firebase Auth User UID of the owner" },
+        "name": { "type": "string", "description": "Full name of the patient" },
+        "email": { "type": "string", "format": "email", "description": "Email address" },
+        "phone": { "type": "string", "description": "Patient telephone number" },
+        "dob": { "type": "string", "description": "Date of birth" },
+        "gender": { "type": "string", "description": "Biological gender" },
+        "bloodType": { "type": "string", "description": "Blood group type" },
+        "emergencyContact": { "type": "object", "description": "Emergency contact name, relation, and phone" },
+        "allergies": { "type": "array", "description": "List of known drug, food, and environmental allergies" },
+        "vaccinations": { "type": "array", "description": "Immunization and vaccination records" },
+        "medicalRecords": { "type": "array", "description": "Clinical prescriptions, lab results, and report documents" },
+        "illnessHistory": { "type": "array", "description": "Past medical and chronic conditions" },
+        "labResults": { "type": "array", "description": "Laboratory test panels and biomarkers" },
+        "qrToken": { "type": "string", "description": "Secure emergency QR code access token" },
+        "qrTokenCreatedAt": { "type": "string", "description": "Timestamp when QR token was generated" },
+        "lastSyncedAt": { "type": "string", "description": "Last synchronization timestamp" },
+        "updatedAt": { "type": "string", "description": "Last updated timestamp" }
+      },
+      "required": ["id", "name", "email"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": "User",
+      "description": "Private user account documents owned exclusively by the authenticated user matching request.auth.uid"
+    },
+    "/patients/{patientId}": {
+      "schema": "Patient",
+      "description": "Patient health records readable and writable by the authenticated record owner, or readable by authorized QR code scan"
+    }
+  }
+}

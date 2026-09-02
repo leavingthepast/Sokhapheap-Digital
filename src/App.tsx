@@ -59,19 +59,30 @@ function parseUrlScanContext(): {
   }
 
   try {
+    const href = window.location.href;
     const searchParams = new URLSearchParams(window.location.search);
+    
     let hash = window.location.hash || '';
     if (hash.startsWith('#')) hash = hash.substring(1);
-    const hashParams = new URLSearchParams(hash.includes('?') ? hash.split('?')[1] : hash);
+    const hashParams = new URLSearchParams(hash.includes('?') ? hash.split('?')[1] : (hash.includes('=') ? hash : ''));
 
-    const view = searchParams.get('view') || hashParams.get('view');
-    const token = searchParams.get('token') || hashParams.get('token');
-    const patientId = searchParams.get('id') || hashParams.get('id');
-    const pdata = searchParams.get('pdata') || hashParams.get('pdata') || searchParams.get('payload');
+    // Extract potential params from search query, hash params, or direct URL regex matches
+    const view = searchParams.get('view') || hashParams.get('view') || (href.includes('view=doctor_portal') ? 'doctor_portal' : null);
+    const token = searchParams.get('token') || hashParams.get('token') || (href.match(/[?&#]token=([^&#]+)/)?.[1]);
+    const patientId = searchParams.get('id') || hashParams.get('id') || (href.match(/[?&#]id=([^&#]+)/)?.[1]);
+    const pdataRaw = searchParams.get('pdata') || hashParams.get('pdata') || searchParams.get('payload') || hashParams.get('payload') || (href.match(/[?&#]pdata=([^&#]+)/)?.[1]);
 
     let scannedPatient: Patient | null = null;
-    if (pdata) {
-      scannedPatient = parseCompactPatientPayload(pdata);
+    if (pdataRaw) {
+      try {
+        scannedPatient = parseCompactPatientPayload(decodeURIComponent(pdataRaw));
+      } catch {
+        try {
+          scannedPatient = parseCompactPatientPayload(pdataRaw);
+        } catch {
+          // ignore
+        }
+      }
     }
 
     const isDoctorView = 
@@ -79,12 +90,13 @@ function parseUrlScanContext(): {
       Boolean(token) || 
       Boolean(patientId) || 
       Boolean(scannedPatient) || 
-      window.location.hash.includes('doctor_portal');
+      window.location.hash.includes('doctor_portal') ||
+      href.includes('doctor_portal');
 
     return {
       isDoctorView,
-      targetPatientId: patientId || undefined,
-      targetToken: token || undefined,
+      targetPatientId: patientId ? decodeURIComponent(patientId) : undefined,
+      targetToken: token ? decodeURIComponent(token) : undefined,
       scannedPatient
     };
   } catch (e) {
