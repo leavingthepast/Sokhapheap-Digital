@@ -1,5 +1,6 @@
 import { 
   db, 
+  auth,
   collection, 
   doc, 
   setDoc, 
@@ -13,6 +14,42 @@ import {
 import { Patient } from '../types';
 
 const PATIENTS_COLLECTION = 'patients';
+
+export enum FirestoreOperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: FirestoreOperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+  };
+}
+
+export function handleFirestoreError(error: unknown, operationType: FirestoreOperationType, path: string | null): FirestoreErrorInfo {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid || null,
+      email: auth.currentUser?.email || null,
+      emailVerified: auth.currentUser?.emailVerified || null,
+      isAnonymous: auth.currentUser?.isAnonymous || null,
+    },
+    operationType,
+    path
+  };
+  return errInfo;
+}
 
 /**
  * Clean object to remove undefined values which Firestore rejects
@@ -60,7 +97,10 @@ export async function pushPatientToFirestore(
     await setDoc(patientRef, payload, { merge: true });
     return { success: true };
   } catch (error: any) {
-    console.warn('Firestore pushPatient error:', error);
+    const errInfo = handleFirestoreError(error, FirestoreOperationType.WRITE, `patients/${patient?.id}`);
+    if (error?.code !== 'permission-denied' || auth.currentUser) {
+      console.warn('Firestore pushPatient:', errInfo.error);
+    }
     return { success: false, error: error?.message || 'Failed to save to Firestore' };
   }
 }
@@ -178,8 +218,11 @@ export function subscribeToPatientFirestore(
         }
       },
       (error) => {
+        const errInfo = handleFirestoreError(error, FirestoreOperationType.GET, `patients/${patientId}`);
         if (onError) onError(error);
-        else console.warn('Firestore subscription error:', error);
+        else if (error?.code !== 'permission-denied' || auth.currentUser) {
+          console.warn('Firestore subscription status:', errInfo.error);
+        }
       }
     );
   } catch (error) {

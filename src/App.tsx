@@ -7,7 +7,8 @@ import {
 } from './data/initialData';
 import { Patient, BloodType, Allergy, Vaccination, MedicalRecord } from './types';
 import { parseCompactPatientPayload } from './utils/qrPayload';
-import { fetchPatientFromServer, savePatientToServer, syncPatientsWithServer } from './utils/patientSync';
+import { fetchPatientFromServer, savePatientToServer, syncPatientsWithServer, mergePatientRecords } from './utils/patientSync';
+import { savePatientsToIDB, loadPatientsFromIDB, saveSinglePatientToIDB, saveSingleRecordToIDB } from './utils/idbStorage';
 import { 
   pushPatientToFirestore, 
   pushAllPatientsToFirestore, 
@@ -170,6 +171,7 @@ function DashboardContent() {
     return localStorage.getItem(STORAGE_KEY_ACTIVE_USER) || null;
   });
 
+  const [isHydrated, setIsHydrated] = useState(false);
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
@@ -206,14 +208,28 @@ function DashboardContent() {
         setActiveEmail(email);
         localStorage.setItem(STORAGE_KEY_ACTIVE_USER, email);
 
-        // Ensure patient record exists
+        // Ensure patient record exists without dropping uploaded documents
         setPatients((prev) => {
           const existing = prev.find((p) => p.email.toLowerCase() === email);
           if (existing) {
             if (user.displayName && (!existing.name || existing.name === 'Patient')) {
-              return prev.map((p) => p.email.toLowerCase() === email ? { ...p, name: user.displayName! } : p);
+              return prev.map((p) => (p.email.toLowerCase() === email ? { ...p, name: user.displayName! } : p));
             }
             return prev;
+          }
+
+          // Check if there is an existing guest/default session with uploaded records to adopt
+          const guestPatient = prev.find((p) => p.email === 'patient@sokhapheap.kh' || p.id === 'SKP-2026-0001');
+          if (guestPatient && guestPatient.medicalRecords && guestPatient.medicalRecords.length > 0) {
+            return prev.map((p) =>
+              p.id === guestPatient.id
+                ? {
+                    ...guestPatient,
+                    name: user.displayName || email.split('@')[0] || guestPatient.name,
+                    email: email,
+                  }
+                : p
+            );
           }
 
           const newPatient: Patient = {
@@ -240,8 +256,6 @@ function DashboardContent() {
           };
           return [newPatient, ...prev];
         });
-      } else if (!user) {
-        // Logged out
       }
     });
 
@@ -254,8 +268,8 @@ function DashboardContent() {
       const ctx = parseUrlScanContext();
       if (ctx.isDoctorView) {
         if (ctx.scannedPatient) {
-          setPatients(prev => {
-            const idx = prev.findIndex(p => p.id === ctx.scannedPatient!.id);
+          setPatients((prev) => {
+            const idx = prev.findIndex((p) => p.id === ctx.scannedPatient!.id);
             if (idx >= 0) {
               const copy = [...prev];
               copy[idx] = ctx.scannedPatient!;
@@ -272,8 +286,8 @@ function DashboardContent() {
           try {
             const freshPatient = await fetchPatientFromServer(targetIdOrToken);
             if (freshPatient) {
-              setPatients(prev => {
-                const idx = prev.findIndex(p => p.id === freshPatient.id);
+              setPatients((prev) => {
+                const idx = prev.findIndex((p) => p.id === freshPatient.id);
                 if (idx >= 0) {
                   const copy = [...prev];
                   copy[idx] = freshPatient;
@@ -284,8 +298,9 @@ function DashboardContent() {
               setActiveEmail(freshPatient.email);
             } else if (!ctx.scannedPatient) {
               const matched = patients.find(
-                p => (ctx.targetPatientId && p.id === ctx.targetPatientId) ||
-                     (ctx.targetToken && p.qrToken === ctx.targetToken)
+                (p) =>
+                  (ctx.targetPatientId && p.id === ctx.targetPatientId) ||
+                  (ctx.targetToken && p.qrToken === ctx.targetToken)
               );
               if (matched) {
                 setActiveEmail(matched.email);
@@ -308,25 +323,56 @@ function DashboardContent() {
     };
   }, []);
 
-  // Initial sync with backend server on load
+  // Initial load & sync with IndexedDB and backend server on load
   useEffect(() => {
     let isMounted = true;
-    syncPatientsWithServer(patients).then((synced) => {
-      if (isMounted && Array.isArray(synced) && synced.length > 0) {
-        setPatients(synced);
+
+    async function initializeData() {
+      try {
+        // 1. Load from local IndexedDB first
+        const idbList = await loadPatientsFromIDB();
+        if (isMounted) {
+          if (Array.isArray(idbList) && idbList.length > 0) {
+            setPatients((prev) => {
+              const map = new Map<string, Patient>();
+              for (const p of prev) map.set(p.id, p);
+              for (const idbP of idbList) {
+                const existing = map.get(idbP.id);
+                map.set(idbP.id, mergePatientRecords(existing, idbP));
+              }
+              return Array.from(map.values());
+            });
+          }
+          setIsHydrated(true);
+        }
+
+        // 2. Sync with remote server and Cloud Firestore
+        const baseForSync = idbList && idbList.length > 0 ? idbList : patients;
+        const synced = await syncPatientsWithServer(baseForSync, currentUser?.uid);
+        if (isMounted && Array.isArray(synced) && synced.length > 0) {
+          setPatients(synced);
+        }
+      } catch (err) {
+        if (isMounted) setIsHydrated(true);
+        console.warn('Initialization note:', err);
       }
-    }).catch(() => {});
-    return () => { isMounted = false; };
+    }
+
+    initializeData();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
-  // Save patients whenever they change (to local storage and server)
+  // Save patients whenever they change (ONLY after initial IDB hydration is complete)
   useEffect(() => {
+    if (!isHydrated) return;
     saveStoredPatients(patients);
     if (patients.length > 0) {
-      // Sync in background
-      syncPatientsWithServer(patients).catch(() => {});
+      savePatientsToIDB(patients).catch(() => {});
+      syncPatientsWithServer(patients, currentUser?.uid).catch(() => {});
     }
-  }, [patients]);
+  }, [patients, isHydrated, currentUser?.uid]);
 
   const currentPatient = useMemo(() => {
     if (isDoctorViewOpen || initialScanContext.isDoctorView) {
@@ -359,7 +405,7 @@ function DashboardContent() {
             const idx = prev.findIndex((p) => p.id === updatedPatient.id);
             if (idx >= 0) {
               const copy = [...prev];
-              copy[idx] = updatedPatient;
+              copy[idx] = mergePatientRecords(copy[idx], updatedPatient);
               return copy;
             }
             return [updatedPatient, ...prev];
@@ -390,8 +436,12 @@ function DashboardContent() {
       const updated = prev.map((p) => (p.id === currentPatient.id ? updater(p) : p));
       const target = updated.find((p) => p.id === currentPatient.id);
       if (target) {
-        // Automatically push updated record to Firestore
-        pushPatientToFirestore(target, currentUser?.uid).catch(() => {});
+        // Save immediately to local storage and IndexedDB
+        saveStoredPatients(updated);
+        savePatientsToIDB(updated).catch(() => {});
+        saveSinglePatientToIDB(target).catch(() => {});
+        // Push updated record to server and Firestore
+        savePatientToServer(target, currentUser?.uid).catch(() => {});
       }
       return updated;
     });
@@ -426,10 +476,25 @@ function DashboardContent() {
       setActiveEmail(lowerEmail);
       localStorage.setItem(STORAGE_KEY_ACTIVE_USER, lowerEmail);
 
-      // Ensure patient record exists in state
+      // Ensure patient record exists in state without losing documents
       setPatients((prev) => {
         const existing = prev.find((p) => p.email.toLowerCase() === lowerEmail);
         if (existing) return prev;
+        
+        // If there's an existing active session with uploaded records, migrate them to user
+        const defaultPatient = prev.find((p) => p.email === 'patient@sokhapheap.kh');
+        if (defaultPatient && defaultPatient.medicalRecords.length > 0) {
+          return prev.map((p) =>
+            p.id === defaultPatient.id
+              ? {
+                  ...defaultPatient,
+                  name: userCred?.user?.displayName || lowerEmail.split('@')[0] || defaultPatient.name,
+                  email: lowerEmail,
+                }
+              : p
+          );
+        }
+
         const newPatient: Patient = {
           id: `SKP-2026-${Math.floor(1000 + Math.random() * 9000)}`,
           name: userCred?.user?.displayName || lowerEmail.split('@')[0] || 'Patient',
@@ -478,30 +543,52 @@ function DashboardContent() {
       setActiveEmail(lowerEmail);
       localStorage.setItem(STORAGE_KEY_ACTIVE_USER, lowerEmail);
 
-      const newPatient: Patient = {
-        id: `SKP-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-        name,
-        email: lowerEmail,
-        dob: '',
-        gender: 'Female',
-        phone: '',
-        profilePicture: undefined,
-        emergencyContact: {
-          name: '',
-          relationship: '',
-          phone: '',
-        },
-        bloodType: 'Unknown',
-        allergies: [],
-        vaccinations: [],
-        medicalRecords: [],
-        illnessHistory: [],
-        labResults: [],
-        qrToken: `SKP-TOK-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
-        qrTokenCreatedAt: new Date().toISOString(),
-      };
+      setPatients((prev) => {
+        const existing = prev.find((p) => p.email.toLowerCase() === lowerEmail);
+        if (existing) {
+          return prev.map((p) => (p.email.toLowerCase() === lowerEmail ? { ...p, name } : p));
+        }
 
-      setPatients((prev) => [newPatient, ...prev]);
+        // Migrate any pre-uploaded documents from default guest session
+        const defaultPatient = prev.find((p) => p.email === 'patient@sokhapheap.kh');
+        if (defaultPatient && defaultPatient.medicalRecords.length > 0) {
+          return prev.map((p) =>
+            p.id === defaultPatient.id
+              ? {
+                  ...defaultPatient,
+                  name,
+                  email: lowerEmail,
+                }
+              : p
+          );
+        }
+
+        const newPatient: Patient = {
+          id: `SKP-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+          name,
+          email: lowerEmail,
+          dob: '',
+          gender: 'Female',
+          phone: '',
+          profilePicture: undefined,
+          emergencyContact: {
+            name: '',
+            relationship: '',
+            phone: '',
+          },
+          bloodType: 'Unknown',
+          allergies: [],
+          vaccinations: [],
+          medicalRecords: [],
+          illnessHistory: [],
+          labResults: [],
+          qrToken: `SKP-TOK-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
+          qrTokenCreatedAt: new Date().toISOString(),
+        };
+
+        return [newPatient, ...prev];
+      });
+
       setActiveTab('overview');
     } catch (err: any) {
       const formatted = formatFirebaseAuthError(err);
@@ -543,6 +630,20 @@ function DashboardContent() {
                     ...p,
                     name: user!.displayName || p.name,
                     profilePicture: user!.photoURL || p.profilePicture,
+                  }
+                : p
+            );
+          }
+
+          const defaultPatient = prev.find((p) => p.email === 'patient@sokhapheap.kh');
+          if (defaultPatient && defaultPatient.medicalRecords.length > 0) {
+            return prev.map((p) =>
+              p.id === defaultPatient.id
+                ? {
+                    ...defaultPatient,
+                    name: user!.displayName || defaultPatient.name,
+                    email,
+                    profilePicture: user!.photoURL || defaultPatient.profilePicture,
                   }
                 : p
             );
@@ -642,6 +743,7 @@ function DashboardContent() {
   };
 
   const handleSaveMedicalRecord = (record: MedicalRecord) => {
+    saveSingleRecordToIDB(currentPatient.id, record).catch(() => {});
     updateCurrentPatient((p) => ({
       ...p,
       medicalRecords: [record, ...p.medicalRecords],

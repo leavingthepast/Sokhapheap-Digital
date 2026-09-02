@@ -38,7 +38,7 @@ import { PdfThumbnail } from './PdfThumbnail';
 
 interface DoctorViewProps {
   patient: Patient;
-  onExit: () => void;
+  onExit?: () => void;
 }
 
 export const DoctorMedicalRecordView: React.FC<DoctorViewProps> = ({ patient, onExit }) => {
@@ -126,7 +126,7 @@ export const DoctorMedicalRecordView: React.FC<DoctorViewProps> = ({ patient, on
                 <span className="font-mono font-bold text-teal-800 bg-teal-50 px-1.5 py-0.5 rounded text-[11px] border border-teal-100">
                   {patient.qrToken}
                 </span>
-                <span className="text-[10px] text-slate-400 hidden sm:inline">• Live Doctor Scan Session</span>
+                <span className="text-[10px] text-slate-400 hidden sm:inline">• View-Only Clinical Portal</span>
               </p>
             </div>
           </div>
@@ -141,14 +141,6 @@ export const DoctorMedicalRecordView: React.FC<DoctorViewProps> = ({ patient, on
             >
               <Printer className="w-3.5 h-3.5 text-slate-600" />
               <span className="hidden sm:inline">{t.printClinicalChart}</span>
-            </button>
-
-            <button
-              onClick={onExit}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold rounded-xl shadow-2xs transition-all hover:scale-102 cursor-pointer"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              <span>{t.backToDashboard}</span>
             </button>
           </div>
         </div>

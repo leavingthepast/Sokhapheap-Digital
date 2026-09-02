@@ -30,34 +30,44 @@ export const STORAGE_KEY_ACTIVE_USER = 'sokhapheap_digital_active_email_v2';
 
 export function getStoredPatients(): Patient[] {
   try {
-    // Clear old legacy dummy key if present
-    localStorage.removeItem('sokhapheap_digital_patients_v1');
-    localStorage.removeItem('sokhapheap_digital_active_email_v1');
-
     const data = localStorage.getItem(STORAGE_KEY_PATIENTS);
     if (data) {
       const parsed = JSON.parse(data);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        // Validate if it contains old dummy data
-        const isDummy = parsed.some(p => p.id === 'SKP-2026-8812' || (p.medicalRecords && p.medicalRecords.some((r: any) => r.id === 'rec-1')));
-        if (!isDummy) {
-          return parsed;
-        }
+        return parsed;
       }
     }
   } catch (e) {
     console.error('Error reading localStorage patients:', e);
   }
   // Initialize with clean initial data
-  localStorage.setItem(STORAGE_KEY_PATIENTS, JSON.stringify(INITIAL_PATIENTS));
+  try {
+    localStorage.setItem(STORAGE_KEY_PATIENTS, JSON.stringify(INITIAL_PATIENTS));
+  } catch {
+    // ignore
+  }
   return INITIAL_PATIENTS;
 }
 
 export function saveStoredPatients(patients: Patient[]): void {
+  if (!Array.isArray(patients) || patients.length === 0) return;
   try {
     localStorage.setItem(STORAGE_KEY_PATIENTS, JSON.stringify(patients));
-  } catch (e) {
-    console.error('Error saving localStorage patients:', e);
+  } catch {
+    // If full data exceeds 5MB localStorage limit, strip large base64 strings for localStorage fallback
+    try {
+      const sanitized = patients.map((p) => ({
+        ...p,
+        medicalRecords: (p.medicalRecords || []).map((r) => ({
+          ...r,
+          imageUrl: r.imageUrl && r.imageUrl.length > 5000 ? undefined : r.imageUrl,
+        })),
+      }));
+      localStorage.setItem(STORAGE_KEY_PATIENTS, JSON.stringify(sanitized));
+    } catch (innerErr) {
+      console.warn('LocalStorage fallback note:', innerErr);
+    }
   }
 }
+
 

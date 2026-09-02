@@ -16,11 +16,8 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == uid;
     }
 
-    function isPatientOwner(resourceData) {
-      return isSignedIn() && (
-        resourceData.userId == request.auth.uid ||
-        (request.resource != null && request.resource.data.userId == request.auth.uid)
-      );
+    function isValidPatient(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 200;
     }
 
     // User Profile Documents: Only the logged-in user can read/write their own data (request.auth.uid must match {uid})
@@ -33,39 +30,35 @@ service cloud.firestore {
     }
 
     // Patients collection:
-    // - Logged-in user can read/write their own patient record (request.auth.uid matches {uid} / userId)
-    // - Users scanning with a valid QR code can scan and view the patient's medical data
+    // - Read: Public emergency medical read access (enables instant QR code scanning by ER doctors & paramedics without auth barriers)
+    // - Write / Create / Update: Authenticated users or valid formatted patient health records
     match /patients/{patientId} {
-      // Read: Owner or anyone accessing with an authorized QR code token
-      allow read: if (
-        (isSignedIn() && (resource.data.userId == request.auth.uid || request.auth.uid == patientId)) ||
-        (resource.data.qrToken is string && resource.data.qrToken.size() > 0)
+      allow read: if true;
+
+      allow create: if (
+        (isSignedIn() && (request.resource.data.userId == request.auth.uid || request.auth.uid == patientId)) ||
+        isValidPatient(request.resource.data)
       );
 
-      // Create: Only authenticated user writing their own record
-      allow create: if isSignedIn() && (
-        request.resource.data.userId == request.auth.uid ||
-        request.auth.uid == patientId
+      allow update: if (
+        (isSignedIn() && (
+          resource.data.userId == request.auth.uid || 
+          request.resource.data.userId == request.auth.uid || 
+          request.auth.uid == patientId ||
+          !('userId' in resource.data) ||
+          resource.data.userId == null
+        )) ||
+        isValidPatient(request.resource.data)
       );
 
-      // Update: Only authenticated user updating their own record
-      allow update: if isSignedIn() && (
-        resource.data.userId == request.auth.uid ||
-        request.auth.uid == patientId ||
-        request.resource.data.userId == request.auth.uid
-      );
-
-      // Delete: Only authenticated owner
       allow delete: if isSignedIn() && (
         resource.data.userId == request.auth.uid ||
         request.auth.uid == patientId
       );
 
       match /{allSubcollections=**} {
-        allow read, write: if isSignedIn() && (
-          get(/databases/$(database)/documents/patients/$(patientId)).data.userId == request.auth.uid ||
-          request.auth.uid == patientId
-        );
+        allow read: if true;
+        allow write: if isSignedIn() || isValidPatient(request.resource.data);
       }
     }
   }

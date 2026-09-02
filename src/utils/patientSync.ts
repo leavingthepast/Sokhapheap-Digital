@@ -1,13 +1,83 @@
-import { Patient } from '../types';
+import { Patient, MedicalRecord, Allergy, Vaccination, IllnessHistoryItem, LabResultItem } from '../types';
 import { CLOUD_DEPLOYED_URL } from './qrPayload';
 import { 
   pushPatientToFirestore, 
   fetchPatientFromFirestore, 
-  fetchAllPatientsFromFirestore,
+  fetchAllPatientsFromFirestore, 
   pushAllPatientsToFirestore 
 } from './firestoreService';
+import { savePatientsToIDB, loadPatientsFromIDB } from './idbStorage';
 
 const API_BASE_URL = typeof window !== 'undefined' ? window.location.origin : CLOUD_DEPLOYED_URL;
+
+/**
+ * Robustly merge local and remote patient records without dropping uploaded documents
+ */
+export function mergePatientRecords(localP?: Patient, remoteP?: Patient): Patient {
+  if (!localP && !remoteP) {
+    return {
+      id: 'SKP-2026-0001',
+      name: 'Patient',
+      email: 'patient@sokhapheap.kh',
+      dob: '',
+      gender: 'Female',
+      phone: '',
+      bloodType: 'Unknown',
+      allergies: [],
+      vaccinations: [],
+      medicalRecords: [],
+      illnessHistory: [],
+      labResults: [],
+      emergencyContact: {
+        name: '',
+        relationship: '',
+        phone: '',
+      },
+      qrToken: 'SKP-TOK-0001',
+      qrTokenCreatedAt: new Date().toISOString(),
+    };
+  }
+  if (!localP) return remoteP!;
+  if (!remoteP) return localP;
+
+  // Union medical records by id preserving all documents
+  const recordsMap = new Map<string, MedicalRecord>();
+  (remoteP.medicalRecords || []).forEach(r => { if (r && r.id) recordsMap.set(r.id, r); });
+  (localP.medicalRecords || []).forEach(r => { if (r && r.id) recordsMap.set(r.id, r); });
+
+  const allergiesMap = new Map<string, Allergy>();
+  (remoteP.allergies || []).forEach(a => { if (a && a.id) allergiesMap.set(a.id, a); });
+  (localP.allergies || []).forEach(a => { if (a && a.id) allergiesMap.set(a.id, a); });
+
+  const vacMap = new Map<string, Vaccination>();
+  (remoteP.vaccinations || []).forEach(v => { if (v && v.id) vacMap.set(v.id, v); });
+  (localP.vaccinations || []).forEach(v => { if (v && v.id) vacMap.set(v.id, v); });
+
+  const illnessMap = new Map<string, IllnessHistoryItem>();
+  (remoteP.illnessHistory || []).forEach(i => { if (i && i.id) illnessMap.set(i.id, i); });
+  (localP.illnessHistory || []).forEach(i => { if (i && i.id) illnessMap.set(i.id, i); });
+
+  const labMap = new Map<string, LabResultItem>();
+  (remoteP.labResults || []).forEach(l => { if (l && l.id) labMap.set(l.id, l); });
+  (localP.labResults || []).forEach(l => { if (l && l.id) labMap.set(l.id, l); });
+
+  return {
+    ...remoteP,
+    ...localP,
+    name: localP.name && localP.name !== 'Patient' ? localP.name : (remoteP.name || localP.name),
+    email: localP.email || remoteP.email,
+    bloodType: localP.bloodType && localP.bloodType !== 'Unknown' ? localP.bloodType : (remoteP.bloodType || 'Unknown'),
+    medicalRecords: Array.from(recordsMap.values()),
+    allergies: Array.from(allergiesMap.values()),
+    vaccinations: Array.from(vacMap.values()),
+    illnessHistory: Array.from(illnessMap.values()),
+    labResults: Array.from(labMap.values()),
+    profilePicture: localP.profilePicture || remoteP.profilePicture,
+    emergencyContact: localP.emergencyContact?.name ? localP.emergencyContact : (remoteP.emergencyContact || localP.emergencyContact),
+    qrToken: localP.qrToken || remoteP.qrToken,
+    qrTokenCreatedAt: localP.qrTokenCreatedAt || remoteP.qrTokenCreatedAt,
+  };
+}
 
 /**
  * Resizes and compresses an image data URL to a clean, fast-loading web format
@@ -15,8 +85,8 @@ const API_BASE_URL = typeof window !== 'undefined' ? window.location.origin : CL
  */
 export async function compressImageForUpload(
   dataUrl: string, 
-  maxDimension: number = 1000, 
-  quality: number = 0.8
+  maxDimension: number = 1600, 
+  quality: number = 0.85
 ): Promise<string> {
   // If already a remote URL, return directly
   if (dataUrl.startsWith('http')) return dataUrl;
@@ -99,12 +169,15 @@ export async function fetchPatientFromServer(idOrToken: string): Promise<Patient
 }
 
 /**
- * Save single patient (including newly uploaded documents) to Cloud Firestore and server.
+ * Save single patient (including newly uploaded documents) to IDB, Cloud Firestore, and server.
  */
 export async function savePatientToServer(patient: Patient, userUid?: string): Promise<boolean> {
+  // 1. Save to IndexedDB immediately for instant offline durability
+  await savePatientsToIDB([patient]).catch(() => {});
+
   let firestoreSuccess = false;
   try {
-    // 1. Push to Cloud Firestore
+    // 2. Push to Cloud Firestore
     const res = await pushPatientToFirestore(patient, userUid);
     firestoreSuccess = res.success;
   } catch (e) {
@@ -112,7 +185,7 @@ export async function savePatientToServer(patient: Patient, userUid?: string): P
   }
 
   try {
-    // 2. Also push to API backend
+    // 3. Also push to API backend
     const endpoints = [
       '/api/patient',
       `${CLOUD_DEPLOYED_URL}/api/patient`
@@ -137,49 +210,72 @@ export async function savePatientToServer(patient: Patient, userUid?: string): P
 }
 
 /**
- * Batch sync patients with Cloud Firestore and server.
+ * Batch sync patients with IndexedDB, Cloud Firestore, and server.
  */
 export async function syncPatientsWithServer(localPatients: Patient[], userUid?: string): Promise<Patient[]> {
   try {
-    // 1. First push local patients to Firestore
-    if (localPatients.length > 0) {
-      await pushAllPatientsToFirestore(localPatients, userUid).catch(() => {});
+    // 1. Check if IndexedDB has additional patients/documents
+    const idbPatients = await loadPatientsFromIDB();
+    const mergedMap = new Map<string, Patient>();
+
+    for (const p of localPatients) {
+      mergedMap.set(p.id, p);
+    }
+
+    for (const idbP of idbPatients) {
+      const existing = mergedMap.get(idbP.id);
+      mergedMap.set(idbP.id, mergePatientRecords(existing, idbP));
+    }
+
+    let currentList = Array.from(mergedMap.values());
+
+    // 2. Push local patients to Firestore & Server
+    if (currentList.length > 0) {
+      await savePatientsToIDB(currentList).catch(() => {});
+      await pushAllPatientsToFirestore(currentList, userUid).catch(() => {});
       
       try {
         await fetch('/api/patients/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ patients: localPatients }),
+          body: JSON.stringify({ patients: currentList }),
         });
       } catch {
         // Ignore network errors in local dev
       }
     }
 
-    // 2. Fetch latest patients from Firestore
+    // 3. Fetch latest patients from Firestore
     const firestorePatients = await fetchAllPatientsFromFirestore();
     if (firestorePatients.length > 0) {
-      // Merge with local records
-      const mergedMap = new Map<string, Patient>();
-      for (const p of localPatients) {
-        mergedMap.set(p.id, p);
+      for (const fp of firestorePatients) {
+        const existing = mergedMap.get(fp.id);
+        mergedMap.set(fp.id, mergePatientRecords(existing, fp));
       }
-      for (const p of firestorePatients) {
-        mergedMap.set(p.id, p);
-      }
-      return Array.from(mergedMap.values());
+      const finalMerged = Array.from(mergedMap.values());
+      await savePatientsToIDB(finalMerged).catch(() => {});
+      return finalMerged;
     }
 
-    // 3. Fallback to API backend
+    // 4. Fallback to API backend
     const res = await fetch('/api/patients');
     if (res.ok) {
       const data = await res.json();
       if (data.success && Array.isArray(data.data) && data.data.length > 0) {
-        return data.data;
+        for (const sp of data.data) {
+          const existing = mergedMap.get(sp.id);
+          mergedMap.set(sp.id, mergePatientRecords(existing, sp));
+        }
+        const finalMerged = Array.from(mergedMap.values());
+        await savePatientsToIDB(finalMerged).catch(() => {});
+        return finalMerged;
       }
     }
+
+    return currentList;
   } catch (e) {
     console.warn('Server sync skipped, using local data', e);
   }
   return localPatients;
 }
+

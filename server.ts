@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 
 // Initial fallback patients data
 const INITIAL_SERVER_PATIENTS = [
@@ -27,8 +28,42 @@ const INITIAL_SERVER_PATIENTS = [
   }
 ];
 
-// In-memory patient store across mobile and desktop devices
-let patientsStore: any[] = [...INITIAL_SERVER_PATIENTS];
+const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_FILE = path.join(DATA_DIR, 'patients.json');
+
+// Helper to load persistent patient store from disk
+function loadDiskPatients(): any[] {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    if (fs.existsSync(DATA_FILE)) {
+      const raw = fs.readFileSync(DATA_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.warn('Notice: loading patients from disk:', err);
+  }
+  return [...INITIAL_SERVER_PATIENTS];
+}
+
+// Helper to save patient store to disk
+function saveDiskPatients(patients: any[]): void {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(DATA_FILE, JSON.stringify(patients, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('Notice: saving patients to disk:', err);
+  }
+}
+
+// Patient store across mobile and desktop devices with disk persistence
+let patientsStore: any[] = loadDiskPatients();
 
 async function startServer() {
   const app = express();
@@ -106,6 +141,7 @@ async function startServer() {
     } else {
       patientsStore.unshift(updatedPatient);
     }
+    saveDiskPatients(patientsStore);
 
     res.json({ success: true, data: updatedPatient });
   });
@@ -118,11 +154,16 @@ async function startServer() {
         const idx = patientsStore.findIndex(p => p.id === newP.id);
         if (idx >= 0) {
           // Merge preserving existing documents
-          patientsStore[idx] = newP;
+          patientsStore[idx] = {
+            ...patientsStore[idx],
+            ...newP,
+            medicalRecords: newP.medicalRecords && newP.medicalRecords.length > 0 ? newP.medicalRecords : patientsStore[idx].medicalRecords,
+          };
         } else {
           patientsStore.push(newP);
         }
       });
+      saveDiskPatients(patientsStore);
       return res.json({ success: true, count: patientsStore.length, data: patientsStore });
     }
     res.json({ success: true, data: patientsStore });

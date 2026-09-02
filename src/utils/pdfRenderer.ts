@@ -1,10 +1,10 @@
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Configure PDF.js worker reliably across Safari and Chrome
+// Configure PDF.js worker reliably across Safari (iOS/macOS) and Chrome (Android/Desktop)
 if (typeof window !== 'undefined') {
   try {
-    // Use worker from unpkg or cdnjs
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version || '4.10.38'}/pdf.worker.min.mjs`;
+    const version = pdfjsLib.version || '4.10.38';
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${version}/build/pdf.worker.min.mjs`;
   } catch (e) {
     console.warn('PDF.js worker setup note:', e);
   }
@@ -34,7 +34,8 @@ export async function renderPdfToImages(
 
     if (typeof pdfSource === 'string') {
       if (pdfSource.startsWith('data:')) {
-        const base64Data = pdfSource.split(',')[1] || '';
+        const parts = pdfSource.split(',');
+        const base64Data = parts[1] || parts[0];
         const binaryString = atob(base64Data);
         const bytes = new Uint8Array(binaryString.length);
         for (let i = 0; i < binaryString.length; i++) {
