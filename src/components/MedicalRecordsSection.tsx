@@ -49,6 +49,11 @@ export const MedicalRecordsSection: React.FC<MedicalRecordsSectionProps> = ({
     return matchesType && matchesSearch;
   });
 
+  const countByType = (type: string) => {
+    if (type === 'ALL') return records.length;
+    return records.filter((r) => r.type === type).length;
+  };
+
   const isPdfRecord = (rec: MedicalRecord) => {
     return rec.fileType === 'pdf' || 
       rec.imageUrl?.startsWith('data:application/pdf') || 
@@ -127,9 +132,14 @@ export const MedicalRecordsSection: React.FC<MedicalRecordsSectionProps> = ({
             <div className="w-8 h-8 rounded-lg bg-teal-50 flex items-center justify-center text-teal-700">
               <FileText className="w-5 h-5" />
             </div>
-            <h2 className="text-xl font-bold text-slate-900 tracking-tight">
-              {t.medicalRecordsTitle}
-            </h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-bold text-slate-900 tracking-tight">
+                {t.medicalRecordsTitle}
+              </h2>
+              <span className="text-xs px-2 py-0.5 font-bold rounded-full bg-teal-100 text-teal-800 border border-teal-200/60">
+                {records.length}
+              </span>
+            </div>
           </div>
           <p className="text-xs text-slate-500 mt-1">
             {t.medicalRecordsSubtitle} (PDF, PNG, JPG, & Camera Scans)
@@ -181,27 +191,37 @@ export const MedicalRecordsSection: React.FC<MedicalRecordsSectionProps> = ({
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-2">
         {/* Type Filter Tabs */}
         <div className="flex flex-wrap items-center gap-1.5 bg-slate-100/90 p-1 rounded-xl border border-slate-200/80 text-xs">
-          {(['ALL', 'Prescription', 'Lab Result', 'Medical Report', 'Other'] as const).map((type) => (
-            <button
-              key={type}
-              onClick={() => setFilterType(type)}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterType === type
-                  ? 'bg-white text-slate-900 shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-              }`}
-            >
-              {type === 'ALL'
-                ? t.all
-                : type === 'Prescription'
-                ? t.prescription
-                : type === 'Lab Result'
-                ? t.labResult
-                : type === 'Medical Report'
-                ? t.medicalReport
-                : t.other}
-            </button>
-          ))}
+          {(['ALL', 'Prescription', 'Lab Result', 'Medical Report', 'Other'] as const).map((type) => {
+            const count = countByType(type);
+            return (
+              <button
+                key={type}
+                onClick={() => setFilterType(type)}
+                className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                  filterType === type
+                    ? 'bg-white text-slate-900 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                }`}
+              >
+                <span>
+                  {type === 'ALL'
+                    ? t.all
+                    : type === 'Prescription'
+                    ? t.prescription
+                    : type === 'Lab Result'
+                    ? t.labResult
+                    : type === 'Medical Report'
+                    ? t.medicalReport
+                    : t.other}
+                </span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold transition-colors ${
+                  filterType === type ? 'bg-teal-100 text-teal-900' : 'bg-slate-200/80 text-slate-600'
+                }`}>
+                  {count}
+                </span>
+              </button>
+            );
+          })}
         </div>
 
         {/* Search Input */}

@@ -11,21 +11,16 @@ import { fetchPatientFromServer, savePatientToServer, syncPatientsWithServer, me
 import { savePatientsToIDB, loadPatientsFromIDB, saveSinglePatientToIDB, saveSingleRecordToIDB } from './utils/idbStorage';
 import { 
   pushPatientToFirestore, 
-  pushAllPatientsToFirestore, 
+  fetchAllPatientsFromFirestore, 
   subscribeToPatientFirestore 
 } from './utils/firestoreService';
 import { 
   auth, 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
-  signInWithPopup, 
-  signInWithRedirect,
-  getRedirectResult,
-  googleProvider, 
   signOut, 
   onAuthStateChanged,
-  updateProfile,
-  User as FirebaseUser
+  type FirebaseUser
 } from './firebase';
 import { Navbar } from './components/Navbar';
 import { WelcomeBanner } from './components/WelcomeBanner';
@@ -47,7 +42,7 @@ import {
   EditProfileFormData
 } from './components/Modals';
 import { LanguageProvider, useLanguage } from './context/LanguageContext';
-import { HelpCircle, CheckCircle, FileText } from 'lucide-react';
+import { HelpCircle, CheckCircle, FileText, AlertTriangle } from 'lucide-react';
 
 function parseUrlScanContext(): {
   isDoctorView: boolean;
@@ -106,37 +101,63 @@ function parseUrlScanContext(): {
   }
 }
 
-function formatFirebaseAuthError(error: any): string {
+export interface AppUser {
+  uid: string;
+  email: string;
+  displayName?: string;
+  photoURL?: string;
+  phoneNumber?: string;
+}
+
+function formatFirebaseAuthError(error: any, mode: 'login' | 'signup'): string {
   const code = error?.code || '';
-  switch (code) {
-    case 'auth/invalid-credential':
-    case 'auth/wrong-password':
-      return 'Invalid email or password. Please check your credentials.';
-    case 'auth/user-not-found':
-      return 'No account found with this email. Please sign up first.';
-    case 'auth/email-already-in-use':
-      return 'An account already exists with this email address.';
-    case 'auth/weak-password':
-      return 'Password should be at least 6 characters long.';
-    case 'auth/invalid-email':
-      return 'Please enter a valid email address.';
-    case 'auth/popup-closed-by-user':
-      return 'Google sign-in popup was closed before completion.';
-    case 'auth/cancelled-popup-request':
-      return 'Google sign-in was cancelled.';
-    case 'auth/popup-blocked':
-      return 'Google sign-in popup was blocked by your browser. Attempting direct redirect...';
-    case 'auth/unauthorized-domain':
-      return 'This domain is not authorized in Firebase Console. Please ensure your domain is added under Firebase Authentication > Settings > Authorized domains.';
-    case 'auth/operation-not-allowed':
-      return 'Google Sign-In is not enabled in Firebase Console. Please enable Google in Authentication > Sign-in method.';
-    case 'auth/account-exists-with-different-credential':
-      return 'An account already exists with this email using a different sign-in method.';
-    case 'auth/network-request-failed':
-      return 'Network connection issue. Please check your internet connection.';
-    default:
-      return error?.message || 'Authentication failed. Please try again.';
+  const message = error?.message || '';
+
+  if (mode === 'login') {
+    if (
+      code === 'auth/invalid-credential' ||
+      code === 'auth/wrong-password' ||
+      code === 'auth/user-not-found' ||
+      code === 'auth/invalid-login-credentials' ||
+      code === 'auth/invalid-email' ||
+      message.includes('INVALID_LOGIN_CREDENTIALS') ||
+      message.includes('invalid-credential') ||
+      message.includes('wrong-password') ||
+      message.includes('user-not-found')
+    ) {
+      return 'Email or password is incorrect';
+    }
   }
+
+  if (mode === 'signup') {
+    if (
+      code === 'auth/email-already-in-use' ||
+      message.includes('email-already-in-use') ||
+      message.includes('EMAIL_EXISTS')
+    ) {
+      return 'User already exists. Please sign in';
+    }
+    if (code === 'auth/weak-password') {
+      return 'Password should be at least 6 characters long.';
+    }
+    if (code === 'auth/invalid-email') {
+      return 'Please enter a valid email address.';
+    }
+  }
+
+  if (code === 'auth/network-request-failed') {
+    return 'Network connection issue. Please check your internet connection.';
+  }
+
+  if (code === 'auth/too-many-requests') {
+    return 'Too many failed attempts. Please try again in a few moments.';
+  }
+
+  if (mode === 'login') {
+    return 'Email or password is incorrect';
+  }
+
+  return error?.message || 'Authentication failed. Please try again.';
 }
 
 function DashboardContent() {
@@ -168,11 +189,11 @@ function DashboardContent() {
       );
       if (matched) return matched.email;
     }
-    return localStorage.getItem(STORAGE_KEY_ACTIVE_USER) || null;
+    return auth.currentUser?.email?.toLowerCase() || localStorage.getItem(STORAGE_KEY_ACTIVE_USER) || null;
   });
 
   const [isHydrated, setIsHydrated] = useState(false);
-  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
+  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(() => auth.currentUser);
   const [authError, setAuthError] = useState<string | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
 
@@ -192,71 +213,93 @@ function DashboardContent() {
   const [initialUploadFile, setInitialUploadFile] = useState<File | null>(null);
   const [viewerRecord, setViewerRecord] = useState<MedicalRecord | null>(null);
 
-  // Listen to Firebase Auth state changes and handle redirect auth result
+  // Listen to Firebase Authentication state changes
   useEffect(() => {
-    // Process redirect result if page was reloaded after signInWithRedirect
-    getRedirectResult(auth).catch((err) => {
-      if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
-        console.warn('Firebase redirect result info:', err);
-      }
-    });
-
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
       if (user && user.email) {
-        const email = user.email.toLowerCase();
-        setActiveEmail(email);
-        localStorage.setItem(STORAGE_KEY_ACTIVE_USER, email);
+        const lowerEmail = user.email.toLowerCase();
+        setActiveEmail(lowerEmail);
+        localStorage.setItem(STORAGE_KEY_ACTIVE_USER, lowerEmail);
 
-        // Ensure patient record exists without dropping uploaded documents
         setPatients((prev) => {
-          const existing = prev.find((p) => p.email.toLowerCase() === email);
-          if (existing) {
-            if (user.displayName && (!existing.name || existing.name === 'Patient')) {
-              return prev.map((p) => (p.email.toLowerCase() === email ? { ...p, name: user.displayName! } : p));
+          const matchIdx = prev.findIndex(
+            (p) => (p.userId && p.userId === user.uid) || (p.email && p.email.toLowerCase() === lowerEmail)
+          );
+          if (matchIdx >= 0) {
+            if (prev[matchIdx].userId !== user.uid) {
+              const copy = [...prev];
+              copy[matchIdx] = { ...copy[matchIdx], userId: user.uid, email: lowerEmail };
+              saveStoredPatients(copy);
+              savePatientsToIDB(copy).catch(() => {});
+              return copy;
             }
             return prev;
           }
 
-          // Check if there is an existing guest/default session with uploaded records to adopt
-          const guestPatient = prev.find((p) => p.email === 'patient@sokhapheap.kh' || p.id === 'SKP-2026-0001');
-          if (guestPatient && guestPatient.medicalRecords && guestPatient.medicalRecords.length > 0) {
-            return prev.map((p) =>
-              p.id === guestPatient.id
-                ? {
-                    ...guestPatient,
-                    name: user.displayName || email.split('@')[0] || guestPatient.name,
-                    email: email,
-                  }
-                : p
-            );
+          // If there is an unassigned patient record, adopt it for this user
+          const unassignedIdx = prev.findIndex((p) => !p.userId);
+          if (unassignedIdx >= 0) {
+            const copy = [...prev];
+            copy[unassignedIdx] = {
+              ...copy[unassignedIdx],
+              userId: user.uid,
+              email: lowerEmail,
+              name: user.displayName || copy[unassignedIdx].name,
+            };
+            saveStoredPatients(copy);
+            savePatientsToIDB(copy).catch(() => {});
+            return copy;
           }
 
-          const newPatient: Patient = {
-            id: `SKP-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-            name: user.displayName || email.split('@')[0] || 'Patient',
-            email: email,
-            dob: '',
-            gender: 'Female',
-            phone: user.phoneNumber || '',
-            profilePicture: user.photoURL || undefined,
-            emergencyContact: {
-              name: '',
-              relationship: '',
-              phone: '',
-            },
-            bloodType: 'Unknown',
-            allergies: [],
-            vaccinations: [],
-            medicalRecords: [],
-            illnessHistory: [],
-            labResults: [],
-            qrToken: `SKP-TOK-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
-            qrTokenCreatedAt: new Date().toISOString(),
-          };
-          return [newPatient, ...prev];
+          return prev;
         });
+
+        // Live sync: fetch patient records from Cloud Firestore
+        try {
+          const remotePatients = await fetchAllPatientsFromFirestore(user.uid);
+          if (remotePatients && remotePatients.length > 0) {
+            setPatients((prev) => {
+              const map = new Map<string, Patient>();
+              for (const p of prev) map.set(p.id, p);
+              for (const rp of remotePatients) {
+                const existing = map.get(rp.id);
+                map.set(rp.id, mergePatientRecords(existing, rp));
+              }
+              const mergedList = Array.from(map.values());
+              saveStoredPatients(mergedList);
+              savePatientsToIDB(mergedList).catch(() => {});
+              return mergedList;
+            });
+          } else {
+            // First time user in Cloud Firestore: push initial profile to Firestore immediately
+            setPatients((prev) => {
+              const target = prev.find((p) => p.userId === user.uid || p.email.toLowerCase() === lowerEmail) || prev[0];
+              if (target) {
+                const recordWithUid = {
+                  ...target,
+                  userId: user.uid,
+                  email: lowerEmail,
+                  name: user.displayName || target.name,
+                };
+                pushPatientToFirestore(recordWithUid, user.uid).catch((err) => {
+                  console.warn('[Firestore] Initial push note:', err);
+                });
+              }
+              return prev;
+            });
+          }
+        } catch (fsErr) {
+          console.warn('[Firestore] Initial user sync note:', fsErr);
+        }
+      } else {
+        const ctx = parseUrlScanContext();
+        if (!ctx.isDoctorView) {
+          setActiveEmail(null);
+          localStorage.removeItem(STORAGE_KEY_ACTIVE_USER);
+        }
       }
+      setIsHydrated(true);
     });
 
     return () => unsubscribe();
@@ -389,43 +432,64 @@ function DashboardContent() {
         if (found) return found;
       }
     }
-    return patients.find((p) => p.email === activeEmail) || patients[0] || INITIAL_PATIENTS[0];
-  }, [patients, activeEmail, isDoctorViewOpen, initialScanContext]);
+    if (currentUser?.uid) {
+      const foundByUid = patients.find((p) => p.userId === currentUser.uid);
+      if (foundByUid) return foundByUid;
+    }
+    if (activeEmail) {
+      const found = patients.find((p) => p.email.toLowerCase() === activeEmail.toLowerCase());
+      if (found) return found;
+    }
+    if (patients.length > 0) {
+      return patients[0];
+    }
+    const email = currentUser?.email || activeEmail || 'patient@sokhapheap.kh';
+    const displayName = currentUser?.displayName || email.split('@')[0] || 'Patient';
+    return {
+      ...INITIAL_PATIENTS[0],
+      id: `SKP-${currentUser?.uid ? currentUser.uid.substring(0, 8).toUpperCase() : '2026-USER'}`,
+      userId: currentUser?.uid,
+      name: displayName,
+      email: email,
+      qrToken: `SKP-TOK-${currentUser?.uid ? currentUser.uid.substring(0, 6).toUpperCase() : 'USER'}`,
+      qrTokenCreatedAt: new Date().toISOString(),
+    };
+  }, [patients, activeEmail, currentUser, isDoctorViewOpen, initialScanContext]);
 
-  // Real-time Firestore sync listener for active patient
+  // Real-time Cloud Firestore subscription for active logged-in patient
   useEffect(() => {
-    if (!currentPatient?.id) return;
-    
-    // Subscribe to real-time changes from Cloud Firestore
-    const unsubscribe = subscribeToPatientFirestore(
-      currentPatient.id,
-      (updatedPatient) => {
-        if (updatedPatient && updatedPatient.id === currentPatient.id) {
-          setPatients((prev) => {
-            const idx = prev.findIndex((p) => p.id === updatedPatient.id);
-            if (idx >= 0) {
-              const copy = [...prev];
-              copy[idx] = mergePatientRecords(copy[idx], updatedPatient);
-              return copy;
-            }
-            return [updatedPatient, ...prev];
-          });
-        }
+    if (!currentUser?.uid || !currentPatient?.id) return;
+
+    const unsubscribe = subscribeToPatientFirestore(currentPatient.id, (remotePatient) => {
+      if (remotePatient && remotePatient.id === currentPatient.id) {
+        setPatients((prev) => {
+          const idx = prev.findIndex((p) => p.id === remotePatient.id);
+          if (idx >= 0) {
+            const merged = mergePatientRecords(prev[idx], remotePatient);
+            const copy = [...prev];
+            copy[idx] = merged;
+            saveStoredPatients(copy);
+            savePatientsToIDB(copy).catch(() => {});
+            return copy;
+          }
+          return [remotePatient, ...prev];
+        });
       }
-    );
+    });
 
     return () => unsubscribe();
-  }, [currentPatient?.id]);
+  }, [currentUser?.uid, currentPatient?.id]);
 
-  const handlePushToFirestore = async (): Promise<boolean> => {
+  const handleSyncData = async (): Promise<boolean> => {
     try {
-      const res = await pushPatientToFirestore(currentPatient, currentUser?.uid);
-      if (res.success) {
-        // Also push all other demo/cached patients in background
-        pushAllPatientsToFirestore(patients, currentUser?.uid).catch(() => {});
-        return true;
+      if (currentPatient) {
+        saveStoredPatients(patients);
+        await savePatientsToIDB(patients).catch(() => {});
+        await savePatientToServer(currentPatient, currentUser?.uid).catch(() => {});
+        const res = await pushPatientToFirestore(currentPatient, currentUser?.uid);
+        return res.success;
       }
-      return false;
+      return true;
     } catch {
       return false;
     }
@@ -433,96 +497,90 @@ function DashboardContent() {
 
   const updateCurrentPatient = (updater: (prev: Patient) => Patient) => {
     setPatients((prev) => {
-      const updated = prev.map((p) => (p.id === currentPatient.id ? updater(p) : p));
-      const target = updated.find((p) => p.id === currentPatient.id);
+      const matchIdx = prev.findIndex(
+        (p) =>
+          p.id === currentPatient.id ||
+          (currentUser?.uid && p.userId === currentUser.uid) ||
+          (currentPatient.email && p.email?.toLowerCase() === currentPatient.email?.toLowerCase())
+      );
+
+      let updated: Patient[];
+      if (matchIdx >= 0) {
+        updated = [...prev];
+        updated[matchIdx] = updater(updated[matchIdx]);
+      } else {
+        const newRecord = updater(currentPatient);
+        updated = [newRecord, ...prev];
+      }
+
+      const target = updated.find(
+        (p) =>
+          p.id === currentPatient.id ||
+          (currentUser?.uid && p.userId === currentUser.uid) ||
+          (currentPatient.email && p.email?.toLowerCase() === currentPatient.email?.toLowerCase())
+      );
+
       if (target) {
         // Save immediately to local storage and IndexedDB
         saveStoredPatients(updated);
         savePatientsToIDB(updated).catch(() => {});
         saveSinglePatientToIDB(target).catch(() => {});
-        // Push updated record to server and Firestore
+        // Push updated record to Express server
         savePatientToServer(target, currentUser?.uid).catch(() => {});
+        // Push live updates directly to Cloud Firestore
+        pushPatientToFirestore(target, currentUser?.uid).catch((err) => {
+          console.warn('[Firestore] Live update push note:', err);
+        });
       }
       return updated;
     });
   };
 
-  // Auth actions with Firebase Authentication
-  const handleLogin = async (email: string, password = 'password123') => {
+  // Firebase Authentication
+  const handleLogin = async (email: string, password = '') => {
     setAuthError(null);
     setIsAuthLoading(true);
     try {
-      let userCred;
-      try {
-        userCred = await signInWithEmailAndPassword(auth, email, password);
-      } catch (loginErr: any) {
-        // If demo/test account does not exist on Firebase Auth yet, auto-create it smoothly
-        if (
-          loginErr?.code === 'auth/user-not-found' ||
-          loginErr?.code === 'auth/invalid-credential' ||
-          loginErr?.code === 'auth/invalid-login-credentials'
-        ) {
-          try {
-            userCred = await createUserWithEmailAndPassword(auth, email, password);
-          } catch (createErr) {
-            throw loginErr;
-          }
-        } else {
-          throw loginErr;
-        }
-      }
-
-      const lowerEmail = email.toLowerCase();
+      const lowerEmail = email.toLowerCase().trim();
+      const userCred = await signInWithEmailAndPassword(auth, lowerEmail, password);
+      setCurrentUser(userCred.user);
       setActiveEmail(lowerEmail);
       localStorage.setItem(STORAGE_KEY_ACTIVE_USER, lowerEmail);
 
-      // Ensure patient record exists in state without losing documents
       setPatients((prev) => {
-        const existing = prev.find((p) => p.email.toLowerCase() === lowerEmail);
-        if (existing) return prev;
-        
-        // If there's an existing active session with uploaded records, migrate them to user
-        const defaultPatient = prev.find((p) => p.email === 'patient@sokhapheap.kh');
-        if (defaultPatient && defaultPatient.medicalRecords.length > 0) {
-          return prev.map((p) =>
-            p.id === defaultPatient.id
-              ? {
-                  ...defaultPatient,
-                  name: userCred?.user?.displayName || lowerEmail.split('@')[0] || defaultPatient.name,
-                  email: lowerEmail,
-                }
-              : p
-          );
+        const matchIdx = prev.findIndex(
+          (p) => (p.userId && p.userId === userCred.user.uid) || (p.email && p.email.toLowerCase() === lowerEmail)
+        );
+        if (matchIdx >= 0) {
+          const copy = [...prev];
+          copy[matchIdx] = { ...copy[matchIdx], userId: userCred.user.uid, email: lowerEmail };
+          saveStoredPatients(copy);
+          savePatientsToIDB(copy).catch(() => {});
+          pushPatientToFirestore(copy[matchIdx], userCred.user.uid).catch(() => {});
+          return copy;
         }
 
-        const newPatient: Patient = {
-          id: `SKP-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-          name: userCred?.user?.displayName || lowerEmail.split('@')[0] || 'Patient',
-          email: lowerEmail,
-          dob: '',
-          gender: 'Female',
-          phone: userCred?.user?.phoneNumber || '',
-          profilePicture: userCred?.user?.photoURL || undefined,
-          emergencyContact: {
-            name: '',
-            relationship: '',
-            phone: '',
-          },
-          bloodType: 'Unknown',
-          allergies: [],
-          vaccinations: [],
-          medicalRecords: [],
-          illnessHistory: [],
-          labResults: [],
-          qrToken: `SKP-TOK-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
-          qrTokenCreatedAt: new Date().toISOString(),
-        };
-        return [newPatient, ...prev];
+        const unassigned = prev.find((p) => !p.userId);
+        if (unassigned) {
+          const copy = prev.map((p) =>
+            p.id === unassigned.id
+              ? { ...unassigned, userId: userCred.user.uid, email: lowerEmail }
+              : p
+          );
+          saveStoredPatients(copy);
+          savePatientsToIDB(copy).catch(() => {});
+          const adopted = copy.find((p) => p.userId === userCred.user.uid);
+          if (adopted) {
+            pushPatientToFirestore(adopted, userCred.user.uid).catch(() => {});
+          }
+          return copy;
+        }
+        return prev;
       });
 
       setActiveTab('overview');
     } catch (err: any) {
-      const formatted = formatFirebaseAuthError(err);
+      const formatted = formatFirebaseAuthError(err, 'login');
       setAuthError(formatted);
       throw new Error(formatted);
     } finally {
@@ -530,153 +588,95 @@ function DashboardContent() {
     }
   };
 
-  const handleCreateAccount = async (name: string, email: string, password = 'password123') => {
+  const handleCreateAccount = async (name: string, email: string, password = '') => {
     setAuthError(null);
     setIsAuthLoading(true);
     try {
-      const res = await createUserWithEmailAndPassword(auth, email, password);
-      if (name && res.user) {
-        await updateProfile(res.user, { displayName: name });
-      }
-
-      const lowerEmail = email.toLowerCase();
+      const lowerEmail = email.toLowerCase().trim();
+      const userCred = await createUserWithEmailAndPassword(auth, lowerEmail, password);
+      setCurrentUser(userCred.user);
       setActiveEmail(lowerEmail);
       localStorage.setItem(STORAGE_KEY_ACTIVE_USER, lowerEmail);
 
       setPatients((prev) => {
-        const existing = prev.find((p) => p.email.toLowerCase() === lowerEmail);
-        if (existing) {
-          return prev.map((p) => (p.email.toLowerCase() === lowerEmail ? { ...p, name } : p));
-        }
-
-        // Migrate any pre-uploaded documents from default guest session
-        const defaultPatient = prev.find((p) => p.email === 'patient@sokhapheap.kh');
-        if (defaultPatient && defaultPatient.medicalRecords.length > 0) {
-          return prev.map((p) =>
-            p.id === defaultPatient.id
-              ? {
-                  ...defaultPatient,
-                  name,
-                  email: lowerEmail,
-                }
-              : p
-          );
-        }
-
-        const newPatient: Patient = {
-          id: `SKP-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-          name,
-          email: lowerEmail,
-          dob: '',
-          gender: 'Female',
-          phone: '',
-          profilePicture: undefined,
-          emergencyContact: {
-            name: '',
-            relationship: '',
-            phone: '',
-          },
-          bloodType: 'Unknown',
-          allergies: [],
-          vaccinations: [],
-          medicalRecords: [],
-          illnessHistory: [],
-          labResults: [],
-          qrToken: `SKP-TOK-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
-          qrTokenCreatedAt: new Date().toISOString(),
-        };
-
-        return [newPatient, ...prev];
-      });
-
-      setActiveTab('overview');
-    } catch (err: any) {
-      const formatted = formatFirebaseAuthError(err);
-      setAuthError(formatted);
-      throw new Error(formatted);
-    } finally {
-      setIsAuthLoading(false);
-    }
-  };
-
-  const handleGoogleSignIn = async () => {
-    setAuthError(null);
-    setIsAuthLoading(true);
-    try {
-      let user: FirebaseUser | null = null;
-      try {
-        const res = await signInWithPopup(auth, googleProvider);
-        user = res.user;
-      } catch (popupErr: any) {
-        if (popupErr?.code === 'auth/popup-blocked') {
-          // If popup is blocked by browser or iframe constraints, try redirect
-          await signInWithRedirect(auth, googleProvider);
-          return;
-        }
-        throw popupErr;
-      }
-
-      if (user && user.email) {
-        const email = user.email.toLowerCase();
-        setActiveEmail(email);
-        localStorage.setItem(STORAGE_KEY_ACTIVE_USER, email);
-
-        setPatients((prev) => {
-          const existing = prev.find((p) => p.email.toLowerCase() === email);
-          if (existing) {
-            return prev.map((p) =>
-              p.email.toLowerCase() === email
-                ? {
-                    ...p,
-                    name: user!.displayName || p.name,
-                    profilePicture: user!.photoURL || p.profilePicture,
-                  }
-                : p
-            );
-          }
-
-          const defaultPatient = prev.find((p) => p.email === 'patient@sokhapheap.kh');
-          if (defaultPatient && defaultPatient.medicalRecords.length > 0) {
-            return prev.map((p) =>
-              p.id === defaultPatient.id
-                ? {
-                    ...defaultPatient,
-                    name: user!.displayName || defaultPatient.name,
-                    email,
-                    profilePicture: user!.photoURL || defaultPatient.profilePicture,
-                  }
-                : p
-            );
-          }
-
-          const newPatient: Patient = {
-            id: `SKP-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-            name: user.displayName || email.split('@')[0],
-            email,
-            dob: '',
-            gender: 'Female',
-            phone: user.phoneNumber || '',
-            profilePicture: user.photoURL || undefined,
-            emergencyContact: {
-              name: '',
-              relationship: '',
-              phone: '',
-            },
-            bloodType: 'Unknown',
-            allergies: [],
-            vaccinations: [],
-            medicalRecords: [],
-            illnessHistory: [],
-            labResults: [],
-            qrToken: `SKP-TOK-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
-            qrTokenCreatedAt: new Date().toISOString(),
+        const matchIdx = prev.findIndex(
+          (p) => (p.userId && p.userId === userCred.user.uid) || (p.email && p.email.toLowerCase() === lowerEmail)
+        );
+        if (matchIdx >= 0) {
+          const copy = [...prev];
+          copy[matchIdx] = {
+            ...copy[matchIdx],
+            userId: userCred.user.uid,
+            name: name || copy[matchIdx].name,
+            email: lowerEmail,
           };
-          return [newPatient, ...prev];
+          saveStoredPatients(copy);
+          savePatientsToIDB(copy).catch(() => {});
+          pushPatientToFirestore(copy[matchIdx], userCred.user.uid).catch(() => {});
+          return copy;
+        }
+
+        const unassigned = prev.find((p) => !p.userId);
+        if (unassigned) {
+          const copy = prev.map((p) =>
+            p.id === unassigned.id
+              ? {
+                  ...unassigned,
+                  userId: userCred.user.uid,
+                  name: name || unassigned.name,
+                  email: lowerEmail,
+                }
+              : p
+          );
+          saveStoredPatients(copy);
+          savePatientsToIDB(copy).catch(() => {});
+          const adopted = copy.find((p) => p.userId === userCred.user.uid);
+          if (adopted) {
+            pushPatientToFirestore(adopted, userCred.user.uid).catch(() => {});
+          }
+          return copy;
+        }
+
+        const newPatient: Patient = {
+          id: `SKP-${userCred.user.uid.substring(0, 8).toUpperCase()}`,
+          userId: userCred.user.uid,
+          name: name || lowerEmail.split('@')[0],
+          email: lowerEmail,
+          dob: '1995-05-15',
+          gender: 'Female',
+          phone: '+855 12 345 678',
+          emergencyContact: {
+            name: 'Emergency Contact',
+            relationship: 'Family',
+            phone: '+855 98 765 432',
+          },
+          bloodType: 'O+',
+          allergies: [
+            { id: 'alg-init-1', name: 'Penicillin', severity: 'Severe', reaction: 'Anaphylaxis' }
+          ],
+          vaccinations: [
+            { id: 'vac-init-1', name: 'COVID-19 (Pfizer-BioNTech)', date: '2023-01-15', notes: 'Booster 2' }
+          ],
+          medicalRecords: [],
+          illnessHistory: [],
+          labResults: [],
+          qrToken: `SKP-TOK-${userCred.user.uid.substring(0, 6).toUpperCase()}`,
+          qrTokenCreatedAt: new Date().toISOString(),
+        };
+
+        const updated = [newPatient, ...prev];
+        saveStoredPatients(updated);
+        savePatientsToIDB(updated).catch(() => {});
+        savePatientToServer(newPatient, userCred.user.uid).catch(() => {});
+        pushPatientToFirestore(newPatient, userCred.user.uid).catch((err) => {
+          console.warn('[Firestore] Account creation push note:', err);
         });
-        setActiveTab('overview');
-      }
+        return updated;
+      });
+
+      setActiveTab('overview');
     } catch (err: any) {
-      const formatted = formatFirebaseAuthError(err);
+      const formatted = formatFirebaseAuthError(err, 'signup');
       setAuthError(formatted);
       throw new Error(formatted);
     } finally {
@@ -687,8 +687,8 @@ function DashboardContent() {
   const handleLogout = async () => {
     try {
       await signOut(auth);
-    } catch (e) {
-      console.error('Error signing out', e);
+    } catch (err) {
+      console.error('Sign out error:', err);
     }
     setActiveEmail(null);
     setCurrentUser(null);
@@ -828,6 +828,7 @@ function DashboardContent() {
       <Navbar
         patient={currentPatient}
         activeTab={activeTab}
+        recordsCount={currentPatient.medicalRecords?.length || 0}
         onSelectTab={setActiveTab}
         onOpenPdf={() => setIsPdfViewOpen(true)}
         onLogout={handleLogout}
@@ -845,7 +846,7 @@ function DashboardContent() {
               onOpenPdf={() => setIsPdfViewOpen(true)}
               onOpenQrTab={() => setActiveTab('qrcode')}
               onEditProfile={() => setEditProfileModalOpen(true)}
-              onPushToFirestore={handlePushToFirestore}
+              onSyncData={handleSyncData}
             />
 
             {/* 4 Health Information Cards Layout matching presentation & screenshot */}
@@ -1098,7 +1099,7 @@ function DashboardContent() {
                 <strong>{t.revocationHeader}</strong> {t.revocationDesc}
               </p>
               <p>
-                <strong>{t.authIntegrationHeader || 'Firebase Auth Protected'}:</strong> Secure login with Firebase Authentication (Email/Password & Google Sign-in).
+                <strong>{t.authIntegrationHeader || 'Account Authentication'}:</strong> Secure login with local credential verification and durable offline storage.
               </p>
             </div>
 

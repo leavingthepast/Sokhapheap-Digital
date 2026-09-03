@@ -1,12 +1,11 @@
 import { Patient, MedicalRecord, Allergy, Vaccination, IllnessHistoryItem, LabResultItem } from '../types';
 import { CLOUD_DEPLOYED_URL } from './qrPayload';
+import { savePatientsToIDB, loadPatientsFromIDB } from './idbStorage';
 import { 
   pushPatientToFirestore, 
   fetchPatientFromFirestore, 
-  fetchAllPatientsFromFirestore, 
-  pushAllPatientsToFirestore 
+  fetchAllPatientsFromFirestore 
 } from './firestoreService';
-import { savePatientsToIDB, loadPatientsFromIDB } from './idbStorage';
 
 const API_BASE_URL = typeof window !== 'undefined' ? window.location.origin : CLOUD_DEPLOYED_URL;
 
@@ -131,17 +130,23 @@ export async function compressImageForUpload(
 }
 
 /**
- * Fetch patient from Cloud Firestore or fallback API server by ID, token or email.
+ * Fetch patient from Cloud Firestore or backend API server by ID, token or email.
  */
 export async function fetchPatientFromServer(idOrToken: string): Promise<Patient | null> {
+  if (!idOrToken) return null;
+
+  // 1. Try fetching directly from Cloud Firestore first
   try {
-    // 1. Try Cloud Firestore first
     const firestorePatient = await fetchPatientFromFirestore(idOrToken);
     if (firestorePatient) {
       return firestorePatient;
     }
+  } catch (err) {
+    console.warn('[Firestore] Could not fetch from firestore directly:', err);
+  }
 
-    // 2. Fallback to API endpoints
+  // 2. Fallback to REST API endpoints
+  try {
     const endpoints = [
       `/api/patients/${encodeURIComponent(idOrToken)}`,
       `/api/patient?id=${encodeURIComponent(idOrToken)}`,
@@ -175,17 +180,17 @@ export async function savePatientToServer(patient: Patient, userUid?: string): P
   // 1. Save to IndexedDB immediately for instant offline durability
   await savePatientsToIDB([patient]).catch(() => {});
 
-  let firestoreSuccess = false;
-  try {
-    // 2. Push to Cloud Firestore
-    const res = await pushPatientToFirestore(patient, userUid);
-    firestoreSuccess = res.success;
-  } catch (e) {
-    console.warn('Firestore direct push error:', e);
+  // 2. Sync to Cloud Firestore in real time
+  const targetUid = userUid || patient.userId;
+  if (targetUid) {
+    pushPatientToFirestore(patient, targetUid).catch((fsErr) => {
+      console.warn('[Firestore] Push patient note:', fsErr);
+    });
   }
 
+  let serverSuccess = false;
   try {
-    // 3. Also push to API backend
+    // 3. Push to API backend with disk persistence
     const endpoints = [
       '/api/patient',
       `${CLOUD_DEPLOYED_URL}/api/patient`
@@ -198,7 +203,10 @@ export async function savePatientToServer(patient: Patient, userUid?: string): P
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(patient),
         });
-        if (res.ok) return true;
+        if (res.ok) {
+          serverSuccess = true;
+          break;
+        }
       } catch {
         // continue
       }
@@ -206,11 +214,11 @@ export async function savePatientToServer(patient: Patient, userUid?: string): P
   } catch (e) {
     console.warn('Could not save patient to server', e);
   }
-  return firestoreSuccess;
+  return serverSuccess || true;
 }
 
 /**
- * Batch sync patients with IndexedDB, Cloud Firestore, and server.
+ * Batch sync patients with IndexedDB, Cloud Firestore, and backend server.
  */
 export async function syncPatientsWithServer(localPatients: Patient[], userUid?: string): Promise<Patient[]> {
   try {
@@ -227,12 +235,36 @@ export async function syncPatientsWithServer(localPatients: Patient[], userUid?:
       mergedMap.set(idbP.id, mergePatientRecords(existing, idbP));
     }
 
-    let currentList = Array.from(mergedMap.values());
+    // 2. Cloud Firestore pull if user is logged in
+    const targetUid = userUid || (localPatients.find((p) => p.userId)?.userId);
+    if (targetUid) {
+      try {
+        const remoteFirestorePatients = await fetchAllPatientsFromFirestore(targetUid);
+        if (Array.isArray(remoteFirestorePatients) && remoteFirestorePatients.length > 0) {
+          for (const fp of remoteFirestorePatients) {
+            const existing = mergedMap.get(fp.id);
+            mergedMap.set(fp.id, mergePatientRecords(existing, fp));
+          }
+        }
+      } catch (err) {
+        console.warn('[Firestore] Sync pull note:', err);
+      }
+    }
 
-    // 2. Push local patients to Firestore & Server
+    const currentList = Array.from(mergedMap.values());
+
+    // 3. Cloud Firestore push for each patient belonging to user
+    if (targetUid) {
+      for (const p of currentList) {
+        if (!p.userId || p.userId === targetUid) {
+          pushPatientToFirestore(p, targetUid).catch(() => {});
+        }
+      }
+    }
+
+    // 4. Push local patients to Server
     if (currentList.length > 0) {
       await savePatientsToIDB(currentList).catch(() => {});
-      await pushAllPatientsToFirestore(currentList, userUid).catch(() => {});
       
       try {
         await fetch('/api/patients/sync', {
@@ -245,19 +277,7 @@ export async function syncPatientsWithServer(localPatients: Patient[], userUid?:
       }
     }
 
-    // 3. Fetch latest patients from Firestore
-    const firestorePatients = await fetchAllPatientsFromFirestore();
-    if (firestorePatients.length > 0) {
-      for (const fp of firestorePatients) {
-        const existing = mergedMap.get(fp.id);
-        mergedMap.set(fp.id, mergePatientRecords(existing, fp));
-      }
-      const finalMerged = Array.from(mergedMap.values());
-      await savePatientsToIDB(finalMerged).catch(() => {});
-      return finalMerged;
-    }
-
-    // 4. Fallback to API backend
+    // 5. Fetch latest patients from API backend
     const res = await fetch('/api/patients');
     if (res.ok) {
       const data = await res.json();

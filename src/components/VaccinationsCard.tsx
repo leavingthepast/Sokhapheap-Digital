@@ -37,7 +37,12 @@ export const VaccinationsCard: React.FC<VaccinationsCardProps> = ({
           <div className="w-8 h-8 rounded-lg bg-sky-50 flex items-center justify-center text-sky-600">
             <Syringe className="w-5 h-5 text-sky-600" />
           </div>
-          <h2 className="text-base font-bold text-slate-800 tracking-tight">{t.vaccinations}</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-base font-bold text-slate-800 tracking-tight">{t.vaccinations}</h2>
+            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-sky-100 text-sky-900 border border-sky-200/60">
+              {vaccinations.length}
+            </span>
+          </div>
         </div>
         <button
           id="add-vaccination-btn"

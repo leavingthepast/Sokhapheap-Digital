@@ -37,7 +37,12 @@ export const AllergiesCard: React.FC<AllergiesCardProps> = ({
           <div className="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center text-amber-500">
             <AlertTriangle className="w-5 h-5" />
           </div>
-          <h2 className="text-base font-bold text-slate-800 tracking-tight">{t.allergies}</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-base font-bold text-slate-800 tracking-tight">{t.allergies}</h2>
+            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-200/60">
+              {allergies.length}
+            </span>
+          </div>
         </div>
         <button
           id="add-allergy-btn"

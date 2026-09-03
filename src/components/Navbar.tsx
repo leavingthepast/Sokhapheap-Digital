@@ -7,6 +7,7 @@ import { LanguageSwitcher } from './LanguageSwitcher';
 interface NavbarProps {
   patient: Patient;
   activeTab: 'overview' | 'records' | 'qrcode';
+  recordsCount?: number;
   onSelectTab: (tab: 'overview' | 'records' | 'qrcode') => void;
   onOpenPdf: () => void;
   onLogout: () => void;
@@ -16,6 +17,7 @@ interface NavbarProps {
 export const Navbar: React.FC<NavbarProps> = ({
   patient,
   activeTab,
+  recordsCount,
   onSelectTab,
   onOpenPdf,
   onLogout,
@@ -63,13 +65,20 @@ export const Navbar: React.FC<NavbarProps> = ({
             <button
               id="nav-records-btn"
               onClick={() => onSelectTab('records')}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all inline-flex items-center gap-1.5 ${
                 activeTab === 'records'
                   ? 'bg-teal-50 text-teal-800 shadow-2xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
               }`}
             >
-              {t.medicalRecords}
+              <span>{t.medicalRecords}</span>
+              {recordsCount !== undefined && recordsCount > 0 && (
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold transition-colors ${
+                  activeTab === 'records' ? 'bg-teal-100 text-teal-900' : 'bg-slate-200 text-slate-700'
+                }`}>
+                  {recordsCount}
+                </span>
+              )}
             </button>
             <button
               id="nav-qrcode-btn"
@@ -127,10 +136,11 @@ export const Navbar: React.FC<NavbarProps> = ({
               <button
                 id="logout-btn"
                 onClick={onLogout}
-                className="text-sm font-medium text-slate-500 hover:text-rose-600 flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-slate-100 transition-colors"
+                className="text-sm font-medium text-slate-500 hover:text-rose-600 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                title={t.logOut}
               >
-                <LogOut className="w-4 h-4 sm:hidden" />
-                <span className="hidden sm:inline">{t.logOut}</span>
+                <LogOut className="w-4 h-4" />
+                <span className="text-xs sm:text-sm">{t.logOut}</span>
               </button>
             </div>
           </div>

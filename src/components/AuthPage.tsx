@@ -119,11 +119,63 @@ export const AuthPage: React.FC<AuthPageProps> = ({
 
           {/* Error Message Banner */}
           {displayError && (
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2 text-rose-800 text-xs">
-              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-              <div className="flex-1 leading-snug">{displayError}</div>
+            <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl space-y-2 text-rose-800 text-xs">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <div className="flex-1 leading-snug">{displayError}</div>
+              </div>
+
+              {authMode === 'login' && (
+                <div className="pt-1 border-t border-rose-200/60 flex items-center justify-between">
+                  <span className="text-[11px] text-rose-700">Need to create this account?</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMode('signup');
+                      setName(email.split('@')[0] || '');
+                      setLocalError(null);
+                    }}
+                    className="text-xs font-bold text-teal-800 underline hover:text-teal-900 cursor-pointer"
+                  >
+                    Register with {email || 'this email'} →
+                  </button>
+                </div>
+              )}
             </div>
           )}
+
+          {/* Quick Demo Access Pill */}
+          <div className="p-3 bg-teal-50/60 border border-teal-200/70 rounded-2xl flex items-center justify-between text-xs">
+            <div className="text-slate-600">
+              <span className="font-semibold text-slate-800 block text-xs">Testing & Evaluation</span>
+              <span className="text-[11px] text-slate-500">Sign in instantly with test account</span>
+            </div>
+            <button
+              type="button"
+              id="quick-demo-login-btn"
+              disabled={busy}
+              onClick={async () => {
+                try {
+                  setLocalLoading(true);
+                  setEmail('testuser123@example.com');
+                  setPassword('Password123!');
+                  await onLogin('testuser123@example.com', 'Password123!');
+                } catch {
+                  // If not yet created in local state, auto-create
+                  try {
+                    await onCreateAccount('Test Patient', 'testuser123@example.com', 'Password123!');
+                  } catch (e: any) {
+                    setLocalError(e.message || 'Could not launch demo account.');
+                  }
+                } finally {
+                  setLocalLoading(false);
+                }
+              }}
+              className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white font-semibold rounded-lg shadow-2xs transition-all cursor-pointer text-xs"
+            >
+              Demo Access
+            </button>
+          </div>
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4">

@@ -1,33 +1,14 @@
-import { initializeApp } from "firebase/app";
+// Import the functions you need from the SDKs you need
+import { initializeApp, getApps, getApp } from "firebase/app";
 import { 
   getAuth, 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
-  signInWithPopup, 
-  signInWithRedirect,
-  getRedirectResult,
-  GoogleAuthProvider, 
   signOut, 
   onAuthStateChanged,
-  updateProfile,
-  sendEmailVerification,
-  User
+  type User as FirebaseUser
 } from "firebase/auth";
-import {
-  getFirestore,
-  collection,
-  doc,
-  setDoc,
-  getDoc,
-  getDocs,
-  onSnapshot,
-  updateDoc,
-  deleteDoc,
-  query,
-  where,
-  serverTimestamp,
-  Firestore
-} from "firebase/firestore";
+import { getFirestore } from "firebase/firestore";
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
@@ -36,42 +17,24 @@ const firebaseConfig = {
   projectId: "sokhapheap-digital",
   storageBucket: "sokhapheap-digital.firebasestorage.app",
   messagingSenderId: "987578360113",
-  appId: "1:987578360113:web:b503e216a965037d191010"
+  appId: "1:987578360113:web:f1a1803065d2c1bf191010"
 };
 
 // Initialize Firebase
-const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
-export const db = getFirestore(app);
+const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
-export const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({
-  prompt: 'select_account'
-});
-googleProvider.addScope('email');
-googleProvider.addScope('profile');
+// Firebase Authentication
+export const auth = getAuth(app);
+
+// Cloud Firestore
+export const db = getFirestore(app);
 
 export {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  signInWithPopup,
-  signInWithRedirect,
-  getRedirectResult,
   signOut,
   onAuthStateChanged,
-  updateProfile,
-  sendEmailVerification,
-  collection,
-  doc,
-  setDoc,
-  getDoc,
-  getDocs,
-  onSnapshot,
-  updateDoc,
-  deleteDoc,
-  query,
-  where,
-  serverTimestamp
+  type FirebaseUser
 };
-export type { User, Firestore };
+
 

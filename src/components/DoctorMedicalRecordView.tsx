@@ -142,6 +142,18 @@ export const DoctorMedicalRecordView: React.FC<DoctorViewProps> = ({ patient, on
               <Printer className="w-3.5 h-3.5 text-slate-600" />
               <span className="hidden sm:inline">{t.printClinicalChart}</span>
             </button>
+
+            {onExit && (
+              <button
+                onClick={onExit}
+                id="click-to-dashboard-btn"
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-teal-800 hover:bg-teal-900 text-white text-xs font-bold rounded-xl transition-all shadow-xs hover:shadow cursor-pointer"
+                title="Return to Patient Dashboard"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>{t.backToDashboard || 'Click to Dashboard'}</span>
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -647,6 +659,20 @@ export const DoctorMedicalRecordView: React.FC<DoctorViewProps> = ({ patient, on
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* Bottom Return to Dashboard Banner */}
+        {onExit && (
+          <div className="pt-6 pb-2 text-center">
+            <button
+              onClick={onExit}
+              id="click-to-dashboard-footer-btn"
+              className="inline-flex items-center gap-2 px-6 py-3.5 bg-teal-800 hover:bg-teal-900 text-white text-sm font-bold rounded-2xl transition-all shadow-md hover:shadow-lg cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>{t.backToDashboard || 'Click to Dashboard'}</span>
+            </button>
           </div>
         )}
       </main>

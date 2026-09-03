@@ -1,19 +1,28 @@
 import { 
-  db, 
-  auth,
   collection, 
   doc, 
   setDoc, 
   getDoc, 
   getDocs, 
-  onSnapshot, 
   deleteDoc, 
   query, 
-  where 
-} from '../firebase';
+  where, 
+  onSnapshot,
+  getDocFromServer
+} from 'firebase/firestore';
+import { db, auth } from '../firebase';
 import { Patient } from '../types';
 
-const PATIENTS_COLLECTION = 'patients';
+async function testConnection() {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error("Please check your Firebase configuration.");
+    }
+  }
+}
+testConnection();
 
 export enum FirestoreOperationType {
   CREATE = 'create',
@@ -37,210 +46,248 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: FirestoreOperationType, path: string | null): FirestoreErrorInfo {
-  const errInfo: FirestoreErrorInfo = {
+  const currentUser = auth.currentUser;
+  const info: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid || null,
-      email: auth.currentUser?.email || null,
-      emailVerified: auth.currentUser?.emailVerified || null,
-      isAnonymous: auth.currentUser?.isAnonymous || null,
+      userId: currentUser?.uid ?? null,
+      email: currentUser?.email ?? null,
+      emailVerified: currentUser?.emailVerified ?? null,
+      isAnonymous: currentUser?.isAnonymous ?? null,
     },
     operationType,
     path
   };
-  return errInfo;
+  console.warn(`[Firestore Error - ${operationType}] at ${path}:`, info.error);
+  return info;
 }
 
 /**
- * Clean object to remove undefined values which Firestore rejects
+ * Deep sanitization helper that removes undefined values and deep copies
+ * so Firestore setDoc does not throw "FieldValue: unsupported field value: undefined"
  */
 function sanitizeForFirestore(obj: any): any {
-  if (obj === null || obj === undefined) return null;
+  if (obj === null || obj === undefined) {
+    return null;
+  }
   if (Array.isArray(obj)) {
-    return obj.map(sanitizeForFirestore);
+    return obj.map(sanitizeForFirestore).filter((item) => item !== undefined);
   }
   if (typeof obj === 'object') {
-    const cleaned: any = {};
-    for (const key of Object.keys(obj)) {
-      const val = obj[key];
+    const clean: Record<string, any> = {};
+    for (const [key, val] of Object.entries(obj)) {
       if (val !== undefined) {
-        cleaned[key] = sanitizeForFirestore(val);
+        clean[key] = sanitizeForFirestore(val);
       }
     }
-    return cleaned;
+    return clean;
   }
   return obj;
 }
 
+export interface FirestorePushResult {
+  success: boolean;
+  error?: string;
+  code?: 'permission-denied' | 'unauthenticated' | 'offline' | 'unknown';
+}
+
 /**
- * Save / push a single patient record to Cloud Firestore.
+ * Push patient document and emergency data directly into Cloud Firestore
  */
 export async function pushPatientToFirestore(
-  patient: Patient, 
+  patient: Patient,
   userUid?: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<FirestorePushResult> {
   try {
-    if (!patient || !patient.id) {
-      return { success: false, error: 'Invalid patient object' };
-    }
+    const targetUid = userUid || auth.currentUser?.uid || patient.userId || 'anonymous-user';
+    const patientId = patient.id || `SKP-${targetUid ? targetUid.substring(0, 8).toUpperCase() : '2026-0001'}`;
 
-    const docId = patient.id;
-    const patientRef = doc(db, PATIENTS_COLLECTION, docId);
-
-    const payload = sanitizeForFirestore({
+    // Ensure userId and uid match for firestore.rules permission check
+    const patientDataToSave = {
       ...patient,
-      userId: userUid || null,
-      lastSyncedAt: new Date().toISOString(),
+      id: patientId,
+      userId: targetUid,
+      uid: targetUid,
+      email: patient.email || auth.currentUser?.email || '',
       updatedAt: new Date().toISOString(),
-    });
+    };
 
-    await setDoc(patientRef, payload, { merge: true });
-    return { success: true };
-  } catch (error: any) {
-    const errInfo = handleFirestoreError(error, FirestoreOperationType.WRITE, `patients/${patient?.id}`);
-    if (error?.code !== 'permission-denied' || auth.currentUser) {
-      console.warn('Firestore pushPatient:', errInfo.error);
+    const sanitized = sanitizeForFirestore(patientDataToSave);
+    const patientRef = doc(db, 'patients', patientId);
+
+    await setDoc(patientRef, sanitized, { merge: true });
+
+    // Also maintain user metadata document in /users/{targetUid} if targetUid exists
+    if (targetUid && targetUid !== 'anonymous-user') {
+      try {
+        const userRef = doc(db, 'users', targetUid);
+        await setDoc(
+          userRef,
+          {
+            uid: targetUid,
+            email: patient.email || auth.currentUser?.email || '',
+            displayName: patient.name,
+            patientId: patientId,
+            lastUpdated: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      } catch (userDocErr) {
+        console.warn('[Firestore] Note on user doc sync:', userDocErr);
+      }
     }
-    return { success: false, error: error?.message || 'Failed to save to Firestore' };
+
+    console.log(`[Firestore] Successfully saved patient ${patientId} to Cloud Firestore!`);
+    return { success: true };
+  } catch (err: any) {
+    const errorInfo = handleFirestoreError(err, FirestoreOperationType.WRITE, `patients/${patient.id}`);
+    const isPermissionDenied = 
+      err?.code === 'permission-denied' || 
+      err?.message?.includes('permission') || 
+      err?.message?.includes('PERMISSION_DENIED');
+    
+    return { 
+      success: false, 
+      error: errorInfo.error,
+      code: isPermissionDenied ? 'permission-denied' : 'unknown'
+    };
   }
 }
 
 /**
- * Batch push multiple patient records to Cloud Firestore.
+ * Batch push patients to Cloud Firestore
  */
 export async function pushAllPatientsToFirestore(
-  patients: Patient[], 
+  patients: Patient[],
   userUid?: string
-): Promise<{ success: boolean; count: number; error?: string }> {
-  try {
-    if (!Array.isArray(patients) || patients.length === 0) {
-      return { success: true, count: 0 };
-    }
-
-    let successCount = 0;
-    for (const patient of patients) {
-      const res = await pushPatientToFirestore(patient, userUid);
-      if (res.success) {
-        successCount++;
-      }
-    }
-
-    return { success: successCount > 0, count: successCount };
-  } catch (error: any) {
-    console.warn('Firestore pushAllPatients error:', error);
-    return { success: false, count: 0, error: error?.message };
+): Promise<{ success: boolean; count: number }> {
+  let count = 0;
+  for (const patient of patients) {
+    const res = await pushPatientToFirestore(patient, userUid);
+    if (res.success) count++;
   }
+  return { success: count > 0, count };
 }
 
 /**
- * Fetch a patient record from Cloud Firestore by ID, Email, or QR Token.
+ * Fetch patient from Cloud Firestore by patientId, qrToken, or userId
  */
 export async function fetchPatientFromFirestore(
-  idOrTokenOrEmail: string
+  identifier: string
 ): Promise<Patient | null> {
-  try {
-    if (!idOrTokenOrEmail) return null;
-    const normalized = idOrTokenOrEmail.trim();
+  if (!identifier) return null;
 
-    // 1. Try direct document reference by ID
+  try {
+    // 1. Direct document ID lookup
+    const directDocRef = doc(db, 'patients', identifier);
+    const directSnap = await getDoc(directDocRef);
+    if (directSnap.exists()) {
+      return directSnap.data() as Patient;
+    }
+
+    // 2. Query by qrToken
     try {
-      const docRef = doc(db, PATIENTS_COLLECTION, normalized);
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        return docSnap.data() as Patient;
+      const qToken = query(collection(db, 'patients'), where('qrToken', '==', identifier));
+      const snapToken = await getDocs(qToken);
+      if (!snapToken.empty) {
+        return snapToken.docs[0].data() as Patient;
       }
     } catch {
-      // Continue to query
+      // index or permission query fallback
     }
 
-    // 2. Query by email
-    const emailQuery = query(
-      collection(db, PATIENTS_COLLECTION),
-      where('email', '==', normalized.toLowerCase())
-    );
-    const emailSnap = await getDocs(emailQuery);
-    if (!emailSnap.empty) {
-      return emailSnap.docs[0].data() as Patient;
-    }
-
-    // 3. Query by qrToken
-    const tokenQuery = query(
-      collection(db, PATIENTS_COLLECTION),
-      where('qrToken', '==', normalized)
-    );
-    const tokenSnap = await getDocs(tokenQuery);
-    if (!tokenSnap.empty) {
-      return tokenSnap.docs[0].data() as Patient;
-    }
-
-    return null;
-  } catch (error) {
-    console.warn('Firestore fetchPatient error:', error);
-    return null;
-  }
-}
-
-/**
- * Fetch all patients from Firestore.
- */
-export async function fetchAllPatientsFromFirestore(): Promise<Patient[]> {
-  try {
-    const colRef = collection(db, PATIENTS_COLLECTION);
-    const querySnapshot = await getDocs(colRef);
-    const patients: Patient[] = [];
-    querySnapshot.forEach((docSnap) => {
-      if (docSnap.exists()) {
-        patients.push(docSnap.data() as Patient);
+    // 3. Query by userId
+    try {
+      const qUser = query(collection(db, 'patients'), where('userId', '==', identifier));
+      const snapUser = await getDocs(qUser);
+      if (!snapUser.empty) {
+        return snapUser.docs[0].data() as Patient;
       }
-    });
-    return patients;
-  } catch (error) {
-    console.warn('Firestore fetchAllPatients error:', error);
-    return [];
+    } catch {
+      // ignore
+    }
+  } catch (err: any) {
+    handleFirestoreError(err, FirestoreOperationType.GET, `patients/${identifier}`);
   }
+
+  return null;
 }
 
 /**
- * Real-time subscription to a patient document in Firestore.
+ * Fetch all patients associated with the current user or authenticated session
+ */
+export async function fetchAllPatientsFromFirestore(userUid?: string): Promise<Patient[]> {
+  const targetUid = userUid || auth.currentUser?.uid;
+  const list: Patient[] = [];
+
+  if (!targetUid) {
+    return list;
+  }
+
+  try {
+    const q = query(collection(db, 'patients'), where('userId', '==', targetUid));
+    const snap = await getDocs(q);
+    snap.forEach((docSnap) => {
+      list.push(docSnap.data() as Patient);
+    });
+
+    // If query returned 0, also check by matching patient doc ID directly
+    if (list.length === 0) {
+      const directDocRef = doc(db, 'patients', targetUid);
+      const directSnap = await getDoc(directDocRef);
+      if (directSnap.exists()) {
+        list.push(directSnap.data() as Patient);
+      }
+    }
+  } catch (err: any) {
+    handleFirestoreError(err, FirestoreOperationType.LIST, 'patients');
+  }
+
+  return list;
+}
+
+/**
+ * Subscribe to real-time updates for a patient document
  */
 export function subscribeToPatientFirestore(
   patientId: string,
   onUpdate: (patient: Patient) => void,
   onError?: (err: any) => void
 ): () => void {
+  if (!patientId) return () => {};
+
   try {
-    const docRef = doc(db, PATIENTS_COLLECTION, patientId);
-    return onSnapshot(
+    const docRef = doc(db, 'patients', patientId);
+    const unsubscribe = onSnapshot(
       docRef,
-      (docSnap) => {
-        if (docSnap.exists()) {
-          onUpdate(docSnap.data() as Patient);
+      (snapshot) => {
+        if (snapshot.exists()) {
+          onUpdate(snapshot.data() as Patient);
         }
       },
       (error) => {
-        const errInfo = handleFirestoreError(error, FirestoreOperationType.GET, `patients/${patientId}`);
+        handleFirestoreError(error, FirestoreOperationType.GET, `patients/${patientId}`);
         if (onError) onError(error);
-        else if (error?.code !== 'permission-denied' || auth.currentUser) {
-          console.warn('Firestore subscription status:', errInfo.error);
-        }
       }
     );
-  } catch (error) {
-    console.warn('Could not setup Firestore subscription:', error);
+    return unsubscribe;
+  } catch (err: any) {
+    handleFirestoreError(err, FirestoreOperationType.GET, `patients/${patientId}`);
     return () => {};
   }
 }
 
 /**
- * Delete patient record from Firestore
+ * Delete a patient document from Cloud Firestore
  */
 export async function deletePatientFromFirestore(patientId: string): Promise<boolean> {
   try {
-    const docRef = doc(db, PATIENTS_COLLECTION, patientId);
+    const docRef = doc(db, 'patients', patientId);
     await deleteDoc(docRef);
     return true;
-  } catch (error) {
-    console.warn('Firestore deletePatient error:', error);
+  } catch (err: any) {
+    handleFirestoreError(err, FirestoreOperationType.DELETE, `patients/${patientId}`);
     return false;
   }
 }
+

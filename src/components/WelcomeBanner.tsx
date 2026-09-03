@@ -3,12 +3,15 @@ import { ShieldCheck, FileText, QrCode, UserPen, Phone, Cloud, CloudCheck, Refre
 import { Patient } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 
+import { FirestoreStatusModal } from './FirestoreStatusModal';
+
 interface WelcomeBannerProps {
   patient: Patient;
   onOpenPdf: () => void;
   onOpenQrTab: () => void;
   onEditProfile: () => void;
-  onPushToFirestore?: () => Promise<boolean>;
+  onSyncData?: () => Promise<boolean | { success: boolean; error?: string; code?: string }>;
+  onPushToFirestore?: () => Promise<boolean | { success: boolean; error?: string; code?: string }>;
 }
 
 export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
@@ -16,23 +19,34 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
   onOpenPdf,
   onOpenQrTab,
   onEditProfile,
+  onSyncData,
   onPushToFirestore,
 }) => {
   const { t } = useLanguage();
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncSuccess, setSyncSuccess] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const initial = patient.name ? patient.name.charAt(0).toUpperCase() : 'P';
 
-  const handleManualSync = async () => {
-    if (!onPushToFirestore || isSyncing) return;
+  const syncHandler = onSyncData || onPushToFirestore;
+
+  const handleManualSync = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!syncHandler || isSyncing) return;
     setIsSyncing(true);
     setSyncSuccess(false);
     try {
-      const ok = await onPushToFirestore();
+      const res = await syncHandler();
+      const ok = typeof res === 'boolean' ? res : res.success;
       if (ok) {
         setSyncSuccess(true);
         setTimeout(() => setSyncSuccess(false), 3500);
+      } else {
+        // Open diagnostic modal if sync could not complete (e.g. permission-denied rules in console)
+        setIsModalOpen(true);
       }
+    } catch {
+      setIsModalOpen(true);
     } finally {
       setIsSyncing(false);
     }
@@ -96,30 +110,47 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
 
             {/* Secondary Patient Metadata (Phone, ID, Firestore Sync Status) */}
             <div className="flex flex-wrap items-center gap-2 sm:gap-3 pt-1.5">
-              <div 
-                onClick={handleManualSync}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border backdrop-blur-xs cursor-pointer transition-all ${
-                  syncSuccess 
-                    ? 'bg-emerald-500/30 border-emerald-300 text-emerald-100' 
-                    : 'bg-white/15 hover:bg-white/25 border-white/20 text-white'
-                }`}
-                title="Click to push and sync latest data with Cloud Firestore"
-              >
-                {isSyncing ? (
-                  <RefreshCw className="w-3.5 h-3.5 text-teal-200 animate-spin" />
-                ) : syncSuccess ? (
-                  <CloudCheck className="w-3.5 h-3.5 text-emerald-300" />
-                ) : (
-                  <Cloud className="w-3.5 h-3.5 text-teal-200" />
-                )}
-                <span>
-                  {isSyncing 
-                    ? (t.syncingFirestore || 'Syncing...') 
-                    : syncSuccess 
-                    ? (t.firestoreSyncSuccess || 'Firestore Synced!') 
-                    : (t.firestoreSynced || 'Firestore Synced')}
-                </span>
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              <div className="flex items-center gap-1.5">
+                <div 
+                  id="welcome-banner-firestore-sync-pill"
+                  onClick={handleManualSync}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border backdrop-blur-xs cursor-pointer transition-all ${
+                    syncSuccess 
+                      ? 'bg-emerald-500/30 border-emerald-300 text-emerald-100' 
+                      : 'bg-white/15 hover:bg-white/25 border-white/20 text-white'
+                  }`}
+                  title="Click to sync latest data with Cloud Firestore"
+                >
+                  {isSyncing ? (
+                    <RefreshCw className="w-3.5 h-3.5 text-teal-200 animate-spin" />
+                  ) : syncSuccess ? (
+                    <CloudCheck className="w-3.5 h-3.5 text-emerald-300" />
+                  ) : (
+                    <Cloud className="w-3.5 h-3.5 text-teal-200" />
+                  )}
+                  <span>
+                    {isSyncing 
+                      ? (t.syncingFirestore || 'Syncing...') 
+                      : syncSuccess 
+                      ? (t.firestoreSyncSuccess || 'Firestore Synced!') 
+                      : (t.firestoreSynced || 'Firestore Synced')}
+                  </span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                </div>
+
+                <button
+                  type="button"
+                  id="open-firestore-status-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsModalOpen(true);
+                  }}
+                  className="p-1 rounded-full bg-white/10 hover:bg-white/20 text-teal-100 hover:text-white transition-colors cursor-pointer text-xs"
+                  title="View Cloud Firestore Status & Security Rules"
+                >
+                  <span className="sr-only">Firestore Settings</span>
+                  <Cloud className="w-3.5 h-3.5" />
+                </button>
               </div>
 
               {patient.phone && (
@@ -157,6 +188,17 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Cloud Firestore Diagnostic & Rules Modal */}
+      <FirestoreStatusModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        patient={patient}
+        onSyncSuccess={() => {
+          setSyncSuccess(true);
+          setTimeout(() => setSyncSuccess(false), 3500);
+        }}
+      />
     </div>
   );
 };
