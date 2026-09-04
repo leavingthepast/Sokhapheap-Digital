@@ -853,12 +853,14 @@ interface DocumentViewerModalProps {
   record: MedicalRecord | null;
   isOpen: boolean;
   onClose: () => void;
+  allowDownload?: boolean;
 }
 
 export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
   record,
   isOpen,
   onClose,
+  allowDownload = true,
 }) => {
   const { t } = useLanguage();
   const [zoomLevel, setZoomLevel] = useState(1);
@@ -1050,14 +1052,24 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
                 <span className="hidden sm:inline">Open Full View</span>
               </button>
 
-              <button
-                type="button"
-                onClick={handleDownload}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg transition-colors cursor-pointer"
-              >
-                <Download className="w-3.5 h-3.5 text-slate-600" />
-                <span>{isPdf ? 'Download PDF' : t.downloadPicture}</span>
-              </button>
+              {allowDownload ? (
+                <button
+                  type="button"
+                  onClick={handleDownload}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5 text-slate-600" />
+                  <span>{isPdf ? 'Download PDF' : t.downloadPicture}</span>
+                </button>
+              ) : (
+                <div
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-500 text-xs font-semibold rounded-lg border border-slate-200"
+                  title="File downloads are disabled for QR code viewers"
+                >
+                  <Lock className="w-3.5 h-3.5 text-slate-400" />
+                  <span>View Only (Download Disabled)</span>
+                </div>
+              )}
 
               <button
                 type="button"

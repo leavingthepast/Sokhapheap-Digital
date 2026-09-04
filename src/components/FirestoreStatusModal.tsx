@@ -62,7 +62,13 @@ export const FirestoreStatusModal: React.FC<FirestoreStatusModalProps> = ({
     setIsRetrying(true);
     setStatusMessage(null);
     try {
-      const res = await pushPatientToFirestore(patient, auth.currentUser?.uid);
+      if (!auth.currentUser) {
+        setStatusType('error');
+        setStatusMessage('Authentication Required: Please sign in or use Demo Access before testing Cloud Firestore writes.');
+        return;
+      }
+
+      const res = await pushPatientToFirestore(patient, auth.currentUser?.uid, { immediate: true });
       if (res.success) {
         setStatusType('success');
         setStatusMessage('Successfully connected and written to Cloud Firestore! Refresh the Firebase Console to view your records.');
@@ -71,6 +77,10 @@ export const FirestoreStatusModal: React.FC<FirestoreStatusModalProps> = ({
         setStatusType('error');
         if (res.code === 'permission-denied') {
           setStatusMessage('Permission Denied: Your Firebase Rules in the Console are still blocking writes. Please paste the rules below into the Rules tab and click "Publish".');
+        } else if (res.code === 'resource-exhausted') {
+          setStatusMessage('Resource Rate Limited: Firestore write stream queue is currently backing off. Please wait a moment and try again.');
+        } else if (res.code === 'unauthenticated') {
+          setStatusMessage('Authentication Required: Please sign in or click "Demo Access" first.');
         } else {
           setStatusMessage(res.error || 'Sync failed. Please check your internet connection and Firebase rules.');
         }

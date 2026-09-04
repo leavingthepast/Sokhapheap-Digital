@@ -30,6 +30,9 @@ import { VaccinationsCard } from './components/VaccinationsCard';
 import { MedicalRecordsSection } from './components/MedicalRecordsSection';
 import { MedicalSummaryPDF } from './components/MedicalSummaryPDF';
 import { DoctorMedicalRecordView } from './components/DoctorMedicalRecordView';
+import { DoctorAdmitGate } from './components/DoctorAdmitGate';
+import { AccessRequestsNotificationModal } from './components/AccessRequestsNotificationModal';
+import { subscribeToIncomingRequests } from './utils/qrAccessManager';
 import { QRCodeTab } from './components/QRCodeTab';
 import { AuthPage } from './components/AuthPage';
 import { 
@@ -212,6 +215,7 @@ function DashboardContent() {
   const [recordModalOpen, setRecordModalOpen] = useState(false);
   const [initialUploadFile, setInitialUploadFile] = useState<File | null>(null);
   const [viewerRecord, setViewerRecord] = useState<MedicalRecord | null>(null);
+  const [notificationsModalOpen, setNotificationsModalOpen] = useState(false);
 
   // Listen to Firebase Authentication state changes
   useEffect(() => {
@@ -270,23 +274,6 @@ function DashboardContent() {
               saveStoredPatients(mergedList);
               savePatientsToIDB(mergedList).catch(() => {});
               return mergedList;
-            });
-          } else {
-            // First time user in Cloud Firestore: push initial profile to Firestore immediately
-            setPatients((prev) => {
-              const target = prev.find((p) => p.userId === user.uid || p.email.toLowerCase() === lowerEmail) || prev[0];
-              if (target) {
-                const recordWithUid = {
-                  ...target,
-                  userId: user.uid,
-                  email: lowerEmail,
-                  name: user.displayName || target.name,
-                };
-                pushPatientToFirestore(recordWithUid, user.uid).catch((err) => {
-                  console.warn('[Firestore] Initial push note:', err);
-                });
-              }
-              return prev;
             });
           }
         } catch (fsErr) {
@@ -413,9 +400,17 @@ function DashboardContent() {
     saveStoredPatients(patients);
     if (patients.length > 0) {
       savePatientsToIDB(patients).catch(() => {});
-      syncPatientsWithServer(patients, currentUser?.uid).catch(() => {});
+      // Debounce server backup synchronization to prevent request flooding
+      const timer = setTimeout(() => {
+        fetch('/api/patients/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ patients }),
+        }).catch(() => {});
+      }, 1000);
+      return () => clearTimeout(timer);
     }
-  }, [patients, isHydrated, currentUser?.uid]);
+  }, [patients, isHydrated]);
 
   const currentPatient = useMemo(() => {
     if (isDoctorViewOpen || initialScanContext.isDoctorView) {
@@ -480,6 +475,29 @@ function DashboardContent() {
     return () => unsubscribe();
   }, [currentUser?.uid, currentPatient?.id]);
 
+  // Real-time subscription to incoming QR scan admission requests for active patient
+  useEffect(() => {
+    if (!currentPatient?.id || isDoctorViewOpen) return;
+
+    const unsubscribe = subscribeToIncomingRequests(currentPatient.id, (freshRequests) => {
+      setPatients((prev) => {
+        const idx = prev.findIndex((p) => p.id === currentPatient.id);
+        if (idx >= 0) {
+          const copy = [...prev];
+          copy[idx] = {
+            ...copy[idx],
+            accessRequests: freshRequests,
+          };
+          saveStoredPatients(copy);
+          return copy;
+        }
+        return prev;
+      });
+    });
+
+    return () => unsubscribe();
+  }, [currentPatient?.id, isDoctorViewOpen]);
+
   const handleSyncData = async (): Promise<boolean> => {
     try {
       if (currentPatient) {
@@ -496,6 +514,9 @@ function DashboardContent() {
   };
 
   const updateCurrentPatient = (updater: (prev: Patient) => Patient) => {
+    let savedTarget: Patient | null = null;
+    let newPatientsList: Patient[] = [];
+
     setPatients((prev) => {
       const matchIdx = prev.findIndex(
         (p) =>
@@ -520,20 +541,22 @@ function DashboardContent() {
           (currentPatient.email && p.email?.toLowerCase() === currentPatient.email?.toLowerCase())
       );
 
-      if (target) {
-        // Save immediately to local storage and IndexedDB
-        saveStoredPatients(updated);
-        savePatientsToIDB(updated).catch(() => {});
-        saveSinglePatientToIDB(target).catch(() => {});
-        // Push updated record to Express server
-        savePatientToServer(target, currentUser?.uid).catch(() => {});
-        // Push live updates directly to Cloud Firestore
-        pushPatientToFirestore(target, currentUser?.uid).catch((err) => {
+      savedTarget = target || null;
+      newPatientsList = updated;
+      return updated;
+    });
+
+    if (savedTarget) {
+      saveStoredPatients(newPatientsList);
+      savePatientsToIDB(newPatientsList).catch(() => {});
+      saveSinglePatientToIDB(savedTarget).catch(() => {});
+      savePatientToServer(savedTarget, currentUser?.uid).catch(() => {});
+      if (currentUser?.uid) {
+        pushPatientToFirestore(savedTarget, currentUser.uid).catch((err) => {
           console.warn('[Firestore] Live update push note:', err);
         });
       }
-      return updated;
-    });
+    }
   };
 
   // Firebase Authentication
@@ -547,6 +570,9 @@ function DashboardContent() {
       setActiveEmail(lowerEmail);
       localStorage.setItem(STORAGE_KEY_ACTIVE_USER, lowerEmail);
 
+      let targetPatient: Patient | null = null;
+      let nextList: Patient[] = [];
+
       setPatients((prev) => {
         const matchIdx = prev.findIndex(
           (p) => (p.userId && p.userId === userCred.user.uid) || (p.email && p.email.toLowerCase() === lowerEmail)
@@ -554,9 +580,8 @@ function DashboardContent() {
         if (matchIdx >= 0) {
           const copy = [...prev];
           copy[matchIdx] = { ...copy[matchIdx], userId: userCred.user.uid, email: lowerEmail };
-          saveStoredPatients(copy);
-          savePatientsToIDB(copy).catch(() => {});
-          pushPatientToFirestore(copy[matchIdx], userCred.user.uid).catch(() => {});
+          targetPatient = copy[matchIdx];
+          nextList = copy;
           return copy;
         }
 
@@ -567,16 +592,21 @@ function DashboardContent() {
               ? { ...unassigned, userId: userCred.user.uid, email: lowerEmail }
               : p
           );
-          saveStoredPatients(copy);
-          savePatientsToIDB(copy).catch(() => {});
-          const adopted = copy.find((p) => p.userId === userCred.user.uid);
-          if (adopted) {
-            pushPatientToFirestore(adopted, userCred.user.uid).catch(() => {});
-          }
+          targetPatient = copy.find((p) => p.userId === userCred.user.uid) || null;
+          nextList = copy;
           return copy;
         }
+        nextList = prev;
         return prev;
       });
+
+      if (nextList.length > 0) {
+        saveStoredPatients(nextList);
+        savePatientsToIDB(nextList).catch(() => {});
+      }
+      if (targetPatient) {
+        pushPatientToFirestore(targetPatient, userCred.user.uid).catch(() => {});
+      }
 
       setActiveTab('overview');
     } catch (err: any) {
@@ -598,6 +628,9 @@ function DashboardContent() {
       setActiveEmail(lowerEmail);
       localStorage.setItem(STORAGE_KEY_ACTIVE_USER, lowerEmail);
 
+      let targetPatient: Patient | null = null;
+      let nextList: Patient[] = [];
+
       setPatients((prev) => {
         const matchIdx = prev.findIndex(
           (p) => (p.userId && p.userId === userCred.user.uid) || (p.email && p.email.toLowerCase() === lowerEmail)
@@ -610,9 +643,8 @@ function DashboardContent() {
             name: name || copy[matchIdx].name,
             email: lowerEmail,
           };
-          saveStoredPatients(copy);
-          savePatientsToIDB(copy).catch(() => {});
-          pushPatientToFirestore(copy[matchIdx], userCred.user.uid).catch(() => {});
+          targetPatient = copy[matchIdx];
+          nextList = copy;
           return copy;
         }
 
@@ -628,12 +660,8 @@ function DashboardContent() {
                 }
               : p
           );
-          saveStoredPatients(copy);
-          savePatientsToIDB(copy).catch(() => {});
-          const adopted = copy.find((p) => p.userId === userCred.user.uid);
-          if (adopted) {
-            pushPatientToFirestore(adopted, userCred.user.uid).catch(() => {});
-          }
+          targetPatient = copy.find((p) => p.userId === userCred.user.uid) || null;
+          nextList = copy;
           return copy;
         }
 
@@ -665,14 +693,21 @@ function DashboardContent() {
         };
 
         const updated = [newPatient, ...prev];
-        saveStoredPatients(updated);
-        savePatientsToIDB(updated).catch(() => {});
-        savePatientToServer(newPatient, userCred.user.uid).catch(() => {});
-        pushPatientToFirestore(newPatient, userCred.user.uid).catch((err) => {
-          console.warn('[Firestore] Account creation push note:', err);
-        });
+        targetPatient = newPatient;
+        nextList = updated;
         return updated;
       });
+
+      if (nextList.length > 0) {
+        saveStoredPatients(nextList);
+        savePatientsToIDB(nextList).catch(() => {});
+      }
+      if (targetPatient) {
+        savePatientToServer(targetPatient, userCred.user.uid).catch(() => {});
+        pushPatientToFirestore(targetPatient, userCred.user.uid).catch((err) => {
+          console.warn('[Firestore] Account creation push note:', err);
+        });
+      }
 
       setActiveTab('overview');
     } catch (err: any) {
@@ -780,17 +815,24 @@ function DashboardContent() {
 
   // 1. If Doctor View is active (via QR scan or button)
   if (isDoctorViewOpen) {
+    const handleExitDoctor = () => {
+      setIsDoctorViewOpen(false);
+      if (window.history.pushState) {
+        const cleanUrl = window.location.protocol + '//' + window.location.host + window.location.pathname;
+        window.history.pushState({ path: cleanUrl }, '', cleanUrl);
+      }
+    };
+
     return (
-      <DoctorMedicalRecordView
+      <DoctorAdmitGate
         patient={currentPatient}
-        onExit={() => {
-          setIsDoctorViewOpen(false);
-          if (window.history.pushState) {
-            const cleanUrl = window.location.protocol + '//' + window.location.host + window.location.pathname;
-            window.history.pushState({ path: cleanUrl }, '', cleanUrl);
-          }
-        }}
-      />
+        onExit={handleExitDoctor}
+      >
+        <DoctorMedicalRecordView
+          patient={currentPatient}
+          onExit={handleExitDoctor}
+        />
+      </DoctorAdmitGate>
     );
   }
 
@@ -833,6 +875,7 @@ function DashboardContent() {
         onOpenPdf={() => setIsPdfViewOpen(true)}
         onLogout={handleLogout}
         onOpenDoctorView={() => setIsDoctorViewOpen(true)}
+        onOpenNotifications={() => setNotificationsModalOpen(true)}
       />
 
       {/* Main Content Area */}
@@ -846,6 +889,7 @@ function DashboardContent() {
               onOpenPdf={() => setIsPdfViewOpen(true)}
               onOpenQrTab={() => setActiveTab('qrcode')}
               onEditProfile={() => setEditProfileModalOpen(true)}
+              onOpenNotifications={() => setNotificationsModalOpen(true)}
               onSyncData={handleSyncData}
             />
 
@@ -977,6 +1021,7 @@ function DashboardContent() {
               patient={currentPatient}
               onOpenDoctorView={() => setIsDoctorViewOpen(true)}
               onRegenerateToken={handleRegenerateToken}
+              onOpenNotifications={() => setNotificationsModalOpen(true)}
             />
           </div>
         )}
@@ -1075,6 +1120,17 @@ function DashboardContent() {
         isOpen={Boolean(viewerRecord)}
         onClose={() => setViewerRecord(null)}
         record={viewerRecord}
+        allowDownload={true}
+      />
+
+      {/* QR Scan Access Admission Notifications Modal */}
+      <AccessRequestsNotificationModal
+        isOpen={notificationsModalOpen}
+        onClose={() => setNotificationsModalOpen(false)}
+        patient={currentPatient}
+        onUpdatePatient={(updatedPatient) => {
+          updateCurrentPatient(() => updatedPatient);
+        }}
       />
 
       {/* Help & Privacy Guide Modal */}

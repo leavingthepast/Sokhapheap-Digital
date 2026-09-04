@@ -58,6 +58,21 @@ export interface LabResultItem {
   labOrHospital: string;
 }
 
+export type QrAccessStatus = 'pending' | 'allowed' | 'not_allowed';
+
+export interface QrAccessRequest {
+  id: string;
+  patientId: string;
+  requesterName: string;
+  requesterRole?: string;
+  requesterLocation?: string;
+  requestedAt: string;
+  status: QrAccessStatus;
+  respondedAt?: string;
+  qrToken?: string;
+  deviceId?: string;
+}
+
 export interface Patient {
   id: string;
   userId?: string;
@@ -80,5 +95,6 @@ export interface Patient {
   labResults: LabResultItem[];
   qrToken: string;
   qrTokenCreatedAt: string;
+  accessRequests?: QrAccessRequest[];
 }
 

@@ -174,23 +174,15 @@ export async function fetchPatientFromServer(idOrToken: string): Promise<Patient
 }
 
 /**
- * Save single patient (including newly uploaded documents) to IDB, Cloud Firestore, and server.
+ * Save single patient (including newly uploaded documents) to IDB and backend server.
  */
-export async function savePatientToServer(patient: Patient, userUid?: string): Promise<boolean> {
+export async function savePatientToServer(patient: Patient, _userUid?: string): Promise<boolean> {
   // 1. Save to IndexedDB immediately for instant offline durability
   await savePatientsToIDB([patient]).catch(() => {});
 
-  // 2. Sync to Cloud Firestore in real time
-  const targetUid = userUid || patient.userId;
-  if (targetUid) {
-    pushPatientToFirestore(patient, targetUid).catch((fsErr) => {
-      console.warn('[Firestore] Push patient note:', fsErr);
-    });
-  }
-
   let serverSuccess = false;
   try {
-    // 3. Push to API backend with disk persistence
+    // 2. Push to API backend with disk persistence
     const endpoints = [
       '/api/patient',
       `${CLOUD_DEPLOYED_URL}/api/patient`
@@ -253,16 +245,7 @@ export async function syncPatientsWithServer(localPatients: Patient[], userUid?:
 
     const currentList = Array.from(mergedMap.values());
 
-    // 3. Cloud Firestore push for each patient belonging to user
-    if (targetUid) {
-      for (const p of currentList) {
-        if (!p.userId || p.userId === targetUid) {
-          pushPatientToFirestore(p, targetUid).catch(() => {});
-        }
-      }
-    }
-
-    // 4. Push local patients to Server
+    // 3. Push local patients to Server
     if (currentList.length > 0) {
       await savePatientsToIDB(currentList).catch(() => {});
       

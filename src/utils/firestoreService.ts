@@ -7,22 +7,10 @@ import {
   deleteDoc, 
   query, 
   where, 
-  onSnapshot,
-  getDocFromServer
+  onSnapshot
 } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { Patient } from '../types';
-
-async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration.");
-    }
-  }
-}
-testConnection();
 
 export enum FirestoreOperationType {
   CREATE = 'create',
@@ -88,27 +76,78 @@ function sanitizeForFirestore(obj: any): any {
 export interface FirestorePushResult {
   success: boolean;
   error?: string;
-  code?: 'permission-denied' | 'unauthenticated' | 'offline' | 'unknown';
+  code?: 'permission-denied' | 'unauthenticated' | 'resource-exhausted' | 'offline' | 'unknown';
+}
+
+// In-flight write deduplication & write stream throttle management
+const activeWrites = new Map<string, Promise<FirestorePushResult>>();
+const queuedNextWrites = new Map<string, { patient: Patient; userUid?: string }>();
+const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+let isWriteStreamOverloaded = false;
+let streamOverloadTimer: ReturnType<typeof setTimeout> | null = null;
+let circuitBreakerUntil = 0;
+let lastFailureReason: { code: FirestorePushResult['code']; error: string } | null = null;
+
+export function clearFirestoreCircuitBreaker() {
+  circuitBreakerUntil = 0;
+  isWriteStreamOverloaded = false;
+  lastFailureReason = null;
+  if (streamOverloadTimer) clearTimeout(streamOverloadTimer);
+}
+
+function markStreamOverload() {
+  isWriteStreamOverloaded = true;
+  circuitBreakerUntil = Date.now() + 60000;
+  lastFailureReason = {
+    code: 'resource-exhausted',
+    error: 'Cloud Firestore write stream queue is full. Writes are temporarily throttled.',
+  };
+  if (streamOverloadTimer) clearTimeout(streamOverloadTimer);
+  streamOverloadTimer = setTimeout(() => {
+    isWriteStreamOverloaded = false;
+    console.info('[Firestore] Write stream backoff delay completed, resuming standard queue.');
+  }, 15000);
 }
 
 /**
- * Push patient document and emergency data directly into Cloud Firestore
+ * Internal direct write to Firestore for a single patient document.
+ * Guarantees that only 1 write per patient document is actively in-flight at any time.
  */
-export async function pushPatientToFirestore(
+async function executePatientWrite(
   patient: Patient,
-  userUid?: string
+  userUid?: string,
+  isManualTest = false
 ): Promise<FirestorePushResult> {
-  try {
-    const targetUid = userUid || auth.currentUser?.uid || patient.userId || 'anonymous-user';
-    const patientId = patient.id || `SKP-${targetUid ? targetUid.substring(0, 8).toUpperCase() : '2026-0001'}`;
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    return {
+      success: false,
+      code: 'unauthenticated',
+      error: 'Cannot push to Cloud Firestore without an authenticated Firebase session.',
+    };
+  }
 
-    // Ensure userId and uid match for firestore.rules permission check
+  // If not a manual user-initiated test, respect backoff and circuit breaker
+  if (!isManualTest) {
+    if (isWriteStreamOverloaded || Date.now() < circuitBreakerUntil) {
+      return {
+        success: false,
+        code: lastFailureReason?.code || 'resource-exhausted',
+        error: lastFailureReason?.error || 'Firestore write operations are currently backing off to prevent queue exhaustion.',
+      };
+    }
+  }
+
+  const targetUid = userUid || currentUser.uid;
+  const patientId = patient.id || `SKP-${targetUid ? targetUid.substring(0, 8).toUpperCase() : '2026-0001'}`;
+
+  try {
     const patientDataToSave = {
       ...patient,
       id: patientId,
       userId: targetUid,
       uid: targetUid,
-      email: patient.email || auth.currentUser?.email || '',
+      email: patient.email || currentUser.email || '',
       updatedAt: new Date().toISOString(),
     };
 
@@ -116,42 +155,147 @@ export async function pushPatientToFirestore(
     const patientRef = doc(db, 'patients', patientId);
 
     await setDoc(patientRef, sanitized, { merge: true });
-
-    // Also maintain user metadata document in /users/{targetUid} if targetUid exists
-    if (targetUid && targetUid !== 'anonymous-user') {
-      try {
-        const userRef = doc(db, 'users', targetUid);
-        await setDoc(
-          userRef,
-          {
-            uid: targetUid,
-            email: patient.email || auth.currentUser?.email || '',
-            displayName: patient.name,
-            patientId: patientId,
-            lastUpdated: new Date().toISOString(),
-          },
-          { merge: true }
-        );
-      } catch (userDocErr) {
-        console.warn('[Firestore] Note on user doc sync:', userDocErr);
-      }
-    }
-
+    
+    // On success, reset any previous circuit breaker
+    clearFirestoreCircuitBreaker();
     console.log(`[Firestore] Successfully saved patient ${patientId} to Cloud Firestore!`);
     return { success: true };
   } catch (err: any) {
-    const errorInfo = handleFirestoreError(err, FirestoreOperationType.WRITE, `patients/${patient.id}`);
+    const msg = err?.message || String(err);
+    const code = err?.code || '';
+
+    if (code === 'resource-exhausted' || msg.includes('resource-exhausted') || msg.includes('queued writes')) {
+      markStreamOverload();
+      return {
+        success: false,
+        code: 'resource-exhausted',
+        error: 'Cloud Firestore write stream queue is full. Writes paused to allow queue buffer to drain.',
+      };
+    }
+
     const isPermissionDenied = 
-      err?.code === 'permission-denied' || 
-      err?.message?.includes('permission') || 
-      err?.message?.includes('PERMISSION_DENIED');
-    
+      code === 'permission-denied' || 
+      msg.includes('permission') || 
+      msg.includes('PERMISSION_DENIED');
+
+    if (isPermissionDenied) {
+      circuitBreakerUntil = Date.now() + 60000;
+      lastFailureReason = {
+        code: 'permission-denied',
+        error: 'Firestore security rules blocked the write. Please publish the recommended rules in Firebase Console.',
+      };
+    }
+
+    const errorInfo = handleFirestoreError(err, FirestoreOperationType.WRITE, `patients/${patientId}`);
     return { 
       success: false, 
       error: errorInfo.error,
       code: isPermissionDenied ? 'permission-denied' : 'unknown'
     };
   }
+}
+
+/**
+ * Push patient document and emergency data directly into Cloud Firestore.
+ * Automatically throttles and debounces writes per patient ID to prevent
+ * "Write stream exhausted maximum allowed queued writes".
+ */
+export async function pushPatientToFirestore(
+  patient: Patient,
+  userUid?: string,
+  options?: { immediate?: boolean }
+): Promise<FirestorePushResult> {
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    // Return early without dispatching unauthenticated RPCs that cause PERMISSION_DENIED stream failures
+    return {
+      success: false,
+      code: 'unauthenticated',
+      error: 'Active Firebase account login is required to sync to Cloud Firestore.',
+    };
+  }
+
+  // If circuit breaker is active and this is not a manual user action, return early
+  if (!options?.immediate && (isWriteStreamOverloaded || Date.now() < circuitBreakerUntil)) {
+    return {
+      success: false,
+      code: lastFailureReason?.code || 'resource-exhausted',
+      error: lastFailureReason?.error || 'Firestore write stream is currently backing off.',
+    };
+  }
+
+  const patientKey = patient.id || (userUid || currentUser.uid);
+
+  // If immediate requested (e.g. from user clicking "Test & Push to Firestore Now" in the UI modal)
+  if (options?.immediate) {
+    const timer = debounceTimers.get(patientKey);
+    if (timer) {
+      clearTimeout(timer);
+      debounceTimers.delete(patientKey);
+    }
+    return executePatientWrite(patient, userUid, true);
+  }
+
+  // Debounced write management:
+  return new Promise((resolve) => {
+    // Store latest payload in queue
+    queuedNextWrites.set(patientKey, { patient, userUid });
+
+    // Cancel existing debounce timer
+    const existingTimer = debounceTimers.get(patientKey);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const timer = setTimeout(async () => {
+      debounceTimers.delete(patientKey);
+      const queued = queuedNextWrites.get(patientKey);
+      queuedNextWrites.delete(patientKey);
+
+      if (!queued) {
+        resolve({ success: true });
+        return;
+      }
+
+      // If circuit breaker tripped while waiting in debounce, cancel write cleanly
+      if (isWriteStreamOverloaded || Date.now() < circuitBreakerUntil) {
+        resolve({
+          success: false,
+          code: lastFailureReason?.code || 'resource-exhausted',
+          error: lastFailureReason?.error || 'Write canceled: circuit breaker active.',
+        });
+        return;
+      }
+
+      // If an active write is already in progress, chain onto it
+      const currentActive = activeWrites.get(patientKey);
+      if (currentActive) {
+        try {
+          await currentActive;
+        } catch {
+          // ignore previous write error
+        }
+      }
+
+      const writePromise = executePatientWrite(queued.patient, queued.userUid, false);
+      activeWrites.set(patientKey, writePromise);
+
+      try {
+        const res = await writePromise;
+        resolve(res);
+      } catch (err: any) {
+        resolve({
+          success: false,
+          error: err?.message || 'Write error',
+          code: 'unknown',
+        });
+      } finally {
+        activeWrites.delete(patientKey);
+      }
+    }, 600);
+
+    debounceTimers.set(patientKey, timer);
+  });
 }
 
 /**

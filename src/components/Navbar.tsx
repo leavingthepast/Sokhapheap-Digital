@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileText, QrCode, LogOut, Printer, ShieldCheck } from 'lucide-react';
+import { FileText, QrCode, LogOut, Printer, ShieldCheck, Bell } from 'lucide-react';
 import { Patient } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { LanguageSwitcher } from './LanguageSwitcher';
@@ -12,6 +12,7 @@ interface NavbarProps {
   onOpenPdf: () => void;
   onLogout: () => void;
   onOpenDoctorView: () => void;
+  onOpenNotifications?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -22,9 +23,13 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenPdf,
   onLogout,
   onOpenDoctorView,
+  onOpenNotifications,
 }) => {
   const { t } = useLanguage();
   const initial = patient.name ? patient.name.charAt(0).toUpperCase() : 'P';
+  const pendingCount = (patient.accessRequests || []).filter(
+    (r) => r.status === 'pending'
+  ).length;
 
   return (
     <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-xs border-b border-slate-100 shadow-2xs no-print">
@@ -92,12 +97,46 @@ export const Navbar: React.FC<NavbarProps> = ({
               <QrCode className="w-4 h-4" />
               <span>{t.qrCode}</span>
             </button>
+
+            {onOpenNotifications && (
+              <button
+                id="nav-notifications-tab-btn"
+                onClick={onOpenNotifications}
+                className="relative px-3 py-2 text-sm font-semibold rounded-lg text-slate-600 hover:text-slate-900 hover:bg-white/60 transition-all flex items-center gap-1.5 cursor-pointer"
+                title="Scan Access Notifications"
+              >
+                <Bell className="w-4 h-4 text-teal-700" />
+                <span className="hidden xl:inline">{t.accessNotifications || 'Access'}</span>
+                {pendingCount > 0 && (
+                  <span className="flex h-4 min-w-[16px] items-center justify-center px-1 rounded-full bg-rose-500 text-[10px] font-bold text-white animate-pulse">
+                    {pendingCount}
+                  </span>
+                )}
+              </button>
+            )}
           </nav>
 
           {/* Right Action & User Profile */}
           <div className="flex items-center gap-2 sm:gap-3">
             {/* Language Switcher */}
             <LanguageSwitcher />
+
+            {/* Notification Bell in Action Bar */}
+            {onOpenNotifications && (
+              <button
+                id="nav-notifications-btn"
+                onClick={onOpenNotifications}
+                className="relative p-2 rounded-xl text-slate-600 hover:text-teal-800 hover:bg-teal-50 transition-colors border border-transparent hover:border-teal-200 cursor-pointer"
+                title="View QR Scan Access Requests (Allowed / Not Allowed)"
+              >
+                <Bell className="w-4 h-4 text-teal-700" />
+                {pendingCount > 0 && (
+                  <span className="absolute -top-1 -right-1 flex h-4.5 min-w-[18px] items-center justify-center px-1 rounded-full bg-rose-500 text-white text-[10px] font-black shadow-xs animate-bounce">
+                    {pendingCount}
+                  </span>
+                )}
+              </button>
+            )}
 
             <button
               id="nav-pdf-summary-btn"

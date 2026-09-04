@@ -127,6 +127,10 @@ export const DoctorMedicalRecordView: React.FC<DoctorViewProps> = ({ patient, on
                   {patient.qrToken}
                 </span>
                 <span className="text-[10px] text-slate-400 hidden sm:inline">• View-Only Clinical Portal</span>
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                  <Lock className="w-2.5 h-2.5" />
+                  <span>View Only (Downloads Restricted)</span>
+                </span>
               </p>
             </div>
           </div>
@@ -442,7 +446,7 @@ export const DoctorMedicalRecordView: React.FC<DoctorViewProps> = ({ patient, on
                     {t.uploadedDocuments} & Scanned Prescriptions
                   </h2>
                   <p className="text-xs text-slate-500">
-                    High-resolution documents with full clinical inspection, zoom, and direct download
+                    High-resolution documents with full clinical inspection and zoom (View-Only Mode • File Downloads Disabled)
                   </p>
                 </div>
               </div>
@@ -683,6 +687,7 @@ export const DoctorMedicalRecordView: React.FC<DoctorViewProps> = ({ patient, on
           record={selectedRecord}
           isOpen={!!selectedRecord}
           onClose={() => setSelectedRecord(null)}
+          allowDownload={false}
         />
       )}
     </div>

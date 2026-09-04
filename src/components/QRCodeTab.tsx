@@ -8,6 +8,7 @@ import {
   ExternalLink, 
   Printer, 
   ShieldCheck, 
+  ShieldAlert,
   Lock, 
   AlertCircle,
   Scan,
@@ -21,7 +22,8 @@ import {
   X,
   Sparkles,
   Info,
-  Maximize2
+  Maximize2,
+  Bell
 } from 'lucide-react';
 import { Patient } from '../types';
 import { useLanguage } from '../context/LanguageContext';
@@ -38,6 +40,7 @@ interface QRCodeTabProps {
   onRegenerateToken: () => void;
   onOpenPdf: () => void;
   onOpenDoctorView: () => void;
+  onOpenNotifications?: () => void;
 }
 
 export const QRCodeTab: React.FC<QRCodeTabProps> = ({
@@ -45,6 +48,7 @@ export const QRCodeTab: React.FC<QRCodeTabProps> = ({
   onRegenerateToken,
   onOpenPdf,
   onOpenDoctorView,
+  onOpenNotifications,
 }) => {
   const { t } = useLanguage();
   const [copied, setCopied] = useState(false);
@@ -53,6 +57,10 @@ export const QRCodeTab: React.FC<QRCodeTabProps> = ({
   const [showPhoneSimulator, setShowPhoneSimulator] = useState(false);
 
   const qrContainerRef = useRef<HTMLDivElement>(null);
+
+  const pendingCount = (patient.accessRequests || []).filter(
+    (r) => r.status === 'pending'
+  ).length;
 
   // Use the exact same generateDoctorScanUrl(patient) as used in MedicalSummaryPDF
   const doctorUrl = generateDoctorScanUrl(patient);
@@ -126,6 +134,23 @@ export const QRCodeTab: React.FC<QRCodeTabProps> = ({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
+            {onOpenNotifications && (
+              <button
+                id="qr-tab-notifications-btn"
+                onClick={onOpenNotifications}
+                className="inline-flex items-center gap-2 px-3.5 py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold rounded-xl transition-all cursor-pointer"
+                title="Manage Allowed & Not Allowed Scanners"
+              >
+                <Bell className="w-4 h-4 text-amber-700" />
+                <span>{t.accessNotifications || 'Access Requests'}</span>
+                {pendingCount > 0 && (
+                  <span className="flex h-5 min-w-[20px] items-center justify-center px-1.5 rounded-full bg-rose-500 text-white text-[10px] font-black animate-pulse">
+                    {pendingCount}
+                  </span>
+                )}
+              </button>
+            )}
+
             <button
               onClick={() => setShowPhoneSimulator(true)}
               className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl transition-all cursor-pointer"
@@ -197,6 +222,34 @@ export const QRCodeTab: React.FC<QRCodeTabProps> = ({
               <Download className="w-3.5 h-3.5 text-slate-600" />
               <span>Download High-Res PNG</span>
             </button>
+
+            {/* Admission Gate Security Info */}
+            <div className="mt-3 p-3 rounded-xl bg-teal-900/5 border border-teal-200/80 text-left space-y-1.5 w-full">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-teal-900 flex items-center gap-1">
+                  <ShieldAlert className="w-3.5 h-3.5 text-teal-700" />
+                  <span>Admit Gate Active</span>
+                </span>
+                {pendingCount > 0 && (
+                  <span className="text-[10px] font-extrabold px-1.5 py-0.2 bg-rose-100 text-rose-800 rounded">
+                    {pendingCount} Pending
+                  </span>
+                )}
+              </div>
+              <p className="text-[10px] text-slate-600 leading-tight">
+                Scanners must request admission. When allowed, they can view records (downloads disabled).
+              </p>
+              {onOpenNotifications && (
+                <button
+                  type="button"
+                  onClick={onOpenNotifications}
+                  className="w-full text-center py-1.5 px-2 bg-teal-800 hover:bg-teal-900 text-white text-[11px] font-bold rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1"
+                >
+                  <Bell className="w-3 h-3" />
+                  <span>Manage Allowed / Not Allowed ({patient.accessRequests?.length || 0})</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
 

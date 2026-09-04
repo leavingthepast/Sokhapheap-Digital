@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ShieldCheck, FileText, QrCode, UserPen, Phone, Cloud, CloudCheck, RefreshCw } from 'lucide-react';
+import { ShieldCheck, FileText, QrCode, UserPen, Phone, Cloud, CloudCheck, RefreshCw, Bell } from 'lucide-react';
 import { Patient } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 
@@ -10,6 +10,7 @@ interface WelcomeBannerProps {
   onOpenPdf: () => void;
   onOpenQrTab: () => void;
   onEditProfile: () => void;
+  onOpenNotifications?: () => void;
   onSyncData?: () => Promise<boolean | { success: boolean; error?: string; code?: string }>;
   onPushToFirestore?: () => Promise<boolean | { success: boolean; error?: string; code?: string }>;
 }
@@ -19,6 +20,7 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
   onOpenPdf,
   onOpenQrTab,
   onEditProfile,
+  onOpenNotifications,
   onSyncData,
   onPushToFirestore,
 }) => {
@@ -27,6 +29,10 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
   const [syncSuccess, setSyncSuccess] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const initial = patient.name ? patient.name.charAt(0).toUpperCase() : 'P';
+
+  const pendingRequestsCount = (patient.accessRequests || []).filter(
+    (r) => r.status === 'pending'
+  ).length;
 
   const syncHandler = onSyncData || onPushToFirestore;
 
@@ -186,6 +192,23 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
             <QrCode className="w-4 h-4 text-teal-100" />
             <span>{t.showQrCode}</span>
           </button>
+
+          {onOpenNotifications && (
+            <button
+              id="banner-access-notifications-btn"
+              onClick={onOpenNotifications}
+              className="relative inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-white/15 hover:bg-white/25 text-white text-sm font-semibold rounded-xl border border-white/30 backdrop-blur-xs transition-all cursor-pointer"
+              title="Scan Access Notifications & Admission Requests"
+            >
+              <Bell className="w-4 h-4 text-teal-100" />
+              <span>{t.accessNotifications || 'Access Requests'}</span>
+              {pendingRequestsCount > 0 && (
+                <span className="flex h-5 min-w-[20px] items-center justify-center px-1.5 rounded-full bg-rose-500 text-white text-[11px] font-black shadow-xs animate-bounce">
+                  {pendingRequestsCount}
+                </span>
+              )}
+            </button>
+          )}
         </div>
       </div>
 

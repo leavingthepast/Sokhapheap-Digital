@@ -136,7 +136,8 @@ async function startServer() {
       patientsStore[existingIndex] = {
         ...patientsStore[existingIndex],
         ...updatedPatient,
-        medicalRecords: updatedPatient.medicalRecords || patientsStore[existingIndex].medicalRecords
+        medicalRecords: updatedPatient.medicalRecords || patientsStore[existingIndex].medicalRecords,
+        accessRequests: updatedPatient.accessRequests || patientsStore[existingIndex].accessRequests || []
       };
     } else {
       patientsStore.unshift(updatedPatient);
@@ -144,6 +145,111 @@ async function startServer() {
     saveDiskPatients(patientsStore);
 
     res.json({ success: true, data: updatedPatient });
+  });
+
+  // =========================================================================
+  // QR ACCESS ADMISSION & PERMISSION ROUTES
+  // =========================================================================
+
+  // Submit an admission request when scanning a patient's QR code
+  app.post("/api/qr-access/request", (req, res) => {
+    const { patientId, qrToken, requesterName, requesterRole, requesterLocation, deviceId, requestId } = req.body;
+    if (!patientId && !qrToken) {
+      return res.status(400).json({ success: false, message: "Missing patient identifier" });
+    }
+
+    const patient = patientsStore.find(p => (patientId && p.id === patientId) || (qrToken && p.qrToken === qrToken));
+    if (!patient) {
+      return res.status(404).json({ success: false, message: "Patient not found" });
+    }
+
+    if (!Array.isArray(patient.accessRequests)) {
+      patient.accessRequests = [];
+    }
+
+    // Check if this request already exists
+    const existingReq = patient.accessRequests.find((r: any) => 
+      (requestId && r.id === requestId) || (deviceId && r.deviceId === deviceId && r.status === 'allowed')
+    );
+
+    if (existingReq) {
+      return res.json({ success: true, request: existingReq });
+    }
+
+    const newRequest = {
+      id: requestId || `req-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      patientId: patient.id,
+      requesterName: requesterName || 'Emergency Physician',
+      requesterRole: requesterRole || 'Clinical Doctor',
+      requesterLocation: requesterLocation || 'Hospital Emergency Department',
+      requestedAt: new Date().toISOString(),
+      status: 'pending',
+      qrToken: qrToken || patient.qrToken,
+      deviceId: deviceId || `dev-${Math.random().toString(36).substring(2, 8)}`,
+    };
+
+    // Insert at beginning of requests list
+    patient.accessRequests.unshift(newRequest);
+    saveDiskPatients(patientsStore);
+
+    console.log(`[QR Access] New scan access request for patient ${patient.id} (${patient.name}) from ${newRequest.requesterName}`);
+    res.json({ success: true, request: newRequest });
+  });
+
+  // Check authorization status for a scanner request
+  app.get("/api/qr-access/status", (req, res) => {
+    const { patientId, requestId, deviceId, qrToken } = req.query;
+    const patient = patientsStore.find(p => (patientId && p.id === patientId) || (qrToken && p.qrToken === qrToken));
+    if (!patient) {
+      return res.status(404).json({ success: false, message: "Patient not found" });
+    }
+
+    const requests = patient.accessRequests || [];
+    const found = requests.find((r: any) => 
+      (requestId && r.id === requestId) || 
+      (deviceId && r.deviceId === deviceId)
+    );
+
+    if (!found) {
+      return res.json({ success: true, status: 'none' });
+    }
+
+    res.json({ success: true, status: found.status, request: found });
+  });
+
+  // Patient responds to access request (Allow or Not Allowed)
+  app.post("/api/qr-access/respond", (req, res) => {
+    const { patientId, requestId, status } = req.body;
+    const patient = patientsStore.find(p => p.id === patientId);
+    if (!patient) {
+      return res.status(404).json({ success: false, message: "Patient not found" });
+    }
+
+    if (!Array.isArray(patient.accessRequests)) {
+      patient.accessRequests = [];
+    }
+
+    const reqItem = patient.accessRequests.find((r: any) => r.id === requestId);
+    if (!reqItem) {
+      return res.status(404).json({ success: false, message: "Request not found" });
+    }
+
+    reqItem.status = status === 'allowed' ? 'allowed' : 'not_allowed';
+    reqItem.respondedAt = new Date().toISOString();
+    saveDiskPatients(patientsStore);
+
+    console.log(`[QR Access] Patient ${patient.id} marked request ${requestId} as ${reqItem.status}`);
+    res.json({ success: true, request: reqItem, accessRequests: patient.accessRequests });
+  });
+
+  // Get all access requests for a patient
+  app.get("/api/qr-access/requests", (req, res) => {
+    const { patientId } = req.query;
+    const patient = patientsStore.find(p => p.id === patientId);
+    if (!patient) {
+      return res.status(404).json({ success: false, message: "Patient not found" });
+    }
+    res.json({ success: true, requests: patient.accessRequests || [] });
   });
 
   // Batch sync patients database
