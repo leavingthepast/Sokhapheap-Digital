@@ -58,7 +58,7 @@ export interface LabResultItem {
   labOrHospital: string;
 }
 
-export type QrAccessStatus = 'pending' | 'allowed' | 'not_allowed';
+export type QrAccessStatus = 'pending' | 'allowed' | 'not_allowed' | 'none';
 
 export interface QrAccessRequest {
   id: string;

@@ -126,22 +126,22 @@ export async function submitQrAccessRequest(params: {
 }
 
 /**
- * Query current authorization status for a request ID or device
+ * Query current authorization status for a request ID
+ * Strictly check by unique requestId to prevent granting blanket access to others
  */
 export async function checkQrAccessStatus(params: {
   patientId: string;
   requestId?: string;
   qrToken?: string;
 }): Promise<QrAccessStatus> {
-  const deviceId = getOrCreateDeviceId();
   const reqId = params.requestId || getSavedRequestIdForPatient(params.patientId);
+  if (!reqId) return 'none';
 
   // 1. Try server endpoint
   try {
     const query = new URLSearchParams();
     query.set('patientId', params.patientId);
-    if (reqId) query.set('requestId', reqId);
-    if (deviceId) query.set('deviceId', deviceId);
+    query.set('requestId', reqId);
     if (params.qrToken) query.set('qrToken', params.qrToken);
 
     const res = await fetch(`/api/qr-access/status?${query.toString()}`);
@@ -162,9 +162,7 @@ export async function checkQrAccessStatus(params: {
       const patients: Patient[] = JSON.parse(storedRaw);
       const matchPatient = patients.find(p => p.id === params.patientId || (params.qrToken && p.qrToken === params.qrToken));
       if (matchPatient && Array.isArray(matchPatient.accessRequests)) {
-        const found = matchPatient.accessRequests.find(r => 
-          (reqId && r.id === reqId) || (deviceId && r.deviceId === deviceId)
-        );
+        const found = matchPatient.accessRequests.find(r => r.id === reqId);
         if (found) {
           return found.status;
         }
@@ -223,17 +221,87 @@ export async function updateQrAccessDecision(
 }
 
 /**
- * Subscribe to access request status changes (both BroadcastChannel and polling)
+ * Play a pleasant, non-intrusive hospital notification audio chime
+ * using native Web Audio API (Zero external assets needed)
+ */
+export function playNotificationAlertChime(): void {
+  try {
+    if (typeof window === 'undefined') return;
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+    const now = ctx.currentTime;
+
+    // Bell 1: E5 (659.25 Hz)
+    const osc1 = ctx.createOscillator();
+    const gain1 = ctx.createGain();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(659.25, now);
+    gain1.gain.setValueAtTime(0.2, now);
+    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+    osc1.connect(gain1);
+    gain1.connect(ctx.destination);
+    osc1.start(now);
+    osc1.stop(now + 0.45);
+
+    // Bell 2: B5 (987.77 Hz) - bright harmonic chime
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(987.77, now + 0.12);
+    gain2.gain.setValueAtTime(0.25, now + 0.12);
+    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
+    osc2.connect(gain2);
+    gain2.connect(ctx.destination);
+    osc2.start(now + 0.12);
+    osc2.stop(now + 0.65);
+  } catch {
+    // audio may be blocked if no user gesture
+  }
+}
+
+/**
+ * Subscribe to access request status changes for a scanner session.
+ * Uses Server-Sent Events (SSE) for instant, millisecond push response
+ * when the patient clicks "Allow", plus BroadcastChannel and fast polling.
  */
 export function subscribeToAccessDecision(
   patientId: string,
   requestId: string | null,
   callback: (status: QrAccessStatus) => void
 ): () => void {
-  const deviceId = getOrCreateDeviceId();
+  let isClosed = false;
+  let eventSource: EventSource | null = null;
 
-  // BroadcastChannel listener
+  // 1. Instant SSE Push Subscription
+  if (typeof window !== 'undefined' && 'EventSource' in window && requestId) {
+    try {
+      eventSource = new EventSource(`/api/qr-access/events?requestId=${encodeURIComponent(requestId)}`);
+      eventSource.onmessage = (e) => {
+        if (isClosed || !e.data) return;
+        try {
+          const parsed = JSON.parse(e.data);
+          if (parsed.type === 'DECISION' && parsed.requestId === requestId) {
+            callback(parsed.status);
+          }
+        } catch {
+          // ignore
+        }
+      };
+      eventSource.onerror = () => {
+        // SSE will attempt reconnection automatically; fallback polling handles gap
+      };
+    } catch {
+      // ignore
+    }
+  }
+
+  // 2. BroadcastChannel listener (instant for same-browser testing)
   const handleBcMessage = (event: MessageEvent) => {
+    if (isClosed) return;
     const data = event.data;
     if (
       data &&
@@ -245,8 +313,9 @@ export function subscribeToAccessDecision(
     }
   };
 
-  // Window storage listener (cross-tab fallback)
+  // 3. Window storage listener (cross-tab fallback)
   const handleStorage = (event: StorageEvent) => {
+    if (isClosed) return;
     if (event.key === 'sokhapheap_latest_qr_decision_event' && event.newValue) {
       try {
         const parsed = JSON.parse(event.newValue);
@@ -267,8 +336,9 @@ export function subscribeToAccessDecision(
   }
   window.addEventListener('storage', handleStorage);
 
-  // Periodic fallback poll (every 1.5s) for mobile scanning
+  // 4. Fast polling fallback (every 500ms) for high-speed responsiveness
   const intervalId = setInterval(async () => {
+    if (isClosed) return;
     try {
       const current = await checkQrAccessStatus({ patientId, requestId: requestId || undefined });
       if (current === 'allowed' || current === 'not_allowed') {
@@ -277,9 +347,13 @@ export function subscribeToAccessDecision(
     } catch {
       // ignore
     }
-  }, 1500);
+  }, 500);
 
   return () => {
+    isClosed = true;
+    if (eventSource) {
+      eventSource.close();
+    }
     if (broadcastChannel) {
       broadcastChannel.removeEventListener('message', handleBcMessage);
     }
@@ -289,31 +363,71 @@ export function subscribeToAccessDecision(
 }
 
 /**
- * Patient-side subscription to incoming QR access requests
+ * Patient-side subscription to incoming QR access requests.
+ * Uses Server-Sent Events (SSE) for instant alerts when a scan request occurs,
+ * plus BroadcastChannel and polling.
  */
 export function subscribeToIncomingRequests(
   patientId: string,
-  onRequestsUpdate: (requests: QrAccessRequest[]) => void
+  onRequestsUpdate: (requests: QrAccessRequest[], isNewAlert?: boolean) => void
 ): () => void {
+  let isClosed = false;
+  let eventSource: EventSource | null = null;
+
+  // 1. Instant SSE Push Subscription
+  if (typeof window !== 'undefined' && 'EventSource' in window && patientId) {
+    try {
+      eventSource = new EventSource(`/api/qr-access/events?patientId=${encodeURIComponent(patientId)}`);
+      eventSource.onmessage = (e) => {
+        if (isClosed || !e.data) return;
+        try {
+          const parsed = JSON.parse(e.data);
+          if (parsed.type === 'NEW_REQUEST_ALERT') {
+            playNotificationAlertChime();
+            if (Array.isArray(parsed.requests)) {
+              onRequestsUpdate(parsed.requests, true);
+            } else if (parsed.request) {
+              fetchIncomingRequests(patientId).then((list) => {
+                if (list) onRequestsUpdate(list, true);
+              });
+            }
+          } else if (parsed.type === 'REQUESTS_UPDATED' && Array.isArray(parsed.requests)) {
+            onRequestsUpdate(parsed.requests, false);
+          }
+        } catch {
+          // ignore
+        }
+      };
+    } catch {
+      // ignore
+    }
+  }
+
+  // 2. BroadcastChannel listener
   const handleBcMessage = (event: MessageEvent) => {
+    if (isClosed) return;
     const data = event.data;
     if (data && data.type === 'ACCESS_REQUEST_SUBMITTED') {
       const req: QrAccessRequest = data.request;
       if (req.patientId === patientId) {
+        playNotificationAlertChime();
         fetchIncomingRequests(patientId).then((list) => {
-          if (list) onRequestsUpdate(list);
+          if (list) onRequestsUpdate(list, true);
         });
       }
     }
   };
 
+  // 3. Window storage listener
   const handleStorage = (event: StorageEvent) => {
+    if (isClosed) return;
     if (event.key === 'sokhapheap_latest_qr_request_event' && event.newValue) {
       try {
         const parsed = JSON.parse(event.newValue);
         if (parsed?.request?.patientId === patientId) {
+          playNotificationAlertChime();
           fetchIncomingRequests(patientId).then((list) => {
-            if (list) onRequestsUpdate(list);
+            if (list) onRequestsUpdate(list, true);
           });
         }
       } catch {
@@ -327,17 +441,22 @@ export function subscribeToIncomingRequests(
   }
   window.addEventListener('storage', handleStorage);
 
-  // Poll every 3 seconds for new requests from remote devices/scanners
+  // 4. Polling fallback (every 1.5 seconds)
   const pollInterval = setInterval(async () => {
+    if (isClosed) return;
     try {
       const list = await fetchIncomingRequests(patientId);
-      if (list) onRequestsUpdate(list);
+      if (list) onRequestsUpdate(list, false);
     } catch {
       // ignore
     }
-  }, 3000);
+  }, 1500);
 
   return () => {
+    isClosed = true;
+    if (eventSource) {
+      eventSource.close();
+    }
     if (broadcastChannel) {
       broadcastChannel.removeEventListener('message', handleBcMessage);
     }

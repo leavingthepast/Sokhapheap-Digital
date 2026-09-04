@@ -148,10 +148,63 @@ async function startServer() {
   });
 
   // =========================================================================
-  // QR ACCESS ADMISSION & PERMISSION ROUTES
+  // QR ACCESS ADMISSION & PERMISSION ROUTES (SSE & REAL-TIME EVENT STREAM)
   // =========================================================================
 
+  // In-memory active Server-Sent Events (SSE) connections for zero-latency push updates
+  // requestId -> Array of Express responses (scanners awaiting authorization)
+  const scannerSseClients = new Map<string, express.Response[]>();
+  // patientId -> Array of Express responses (patients listening for incoming scan alerts)
+  const patientSseClients = new Map<string, express.Response[]>();
+
+  // Real-time Server-Sent Events (SSE) streaming endpoint
+  app.get("/api/qr-access/events", (req, res) => {
+    const { patientId, requestId } = req.query;
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no"); // Disable proxy buffering for immediate push
+    res.flushHeaders();
+
+    // Initial connection acknowledgement
+    res.write(`data: ${JSON.stringify({ type: 'CONNECTED', timestamp: Date.now() })}\n\n`);
+
+    const pId = patientId ? String(patientId) : null;
+    const rId = requestId ? String(requestId) : null;
+
+    if (pId) {
+      if (!patientSseClients.has(pId)) patientSseClients.set(pId, []);
+      patientSseClients.get(pId)!.push(res);
+    }
+
+    if (rId) {
+      if (!scannerSseClients.has(rId)) scannerSseClients.set(rId, []);
+      scannerSseClients.get(rId)!.push(res);
+    }
+
+    // Keep-alive heartbeat every 15 seconds
+    const heartbeatTimer = setInterval(() => {
+      try {
+        res.write(`: heartbeat\n\n`);
+      } catch {
+        clearInterval(heartbeatTimer);
+      }
+    }, 15000);
+
+    req.on("close", () => {
+      clearInterval(heartbeatTimer);
+      if (pId && patientSseClients.has(pId)) {
+        patientSseClients.set(pId, patientSseClients.get(pId)!.filter(c => c !== res));
+      }
+      if (rId && scannerSseClients.has(rId)) {
+        scannerSseClients.set(rId, scannerSseClients.get(rId)!.filter(c => c !== res));
+      }
+    });
+  });
+
   // Submit an admission request when scanning a patient's QR code
+  // Every scan produces a single isolated request. No blanket authorization for everyone!
   app.post("/api/qr-access/request", (req, res) => {
     const { patientId, qrToken, requesterName, requesterRole, requesterLocation, deviceId, requestId } = req.body;
     if (!patientId && !qrToken) {
@@ -167,17 +220,16 @@ async function startServer() {
       patient.accessRequests = [];
     }
 
-    // Check if this request already exists
-    const existingReq = patient.accessRequests.find((r: any) => 
-      (requestId && r.id === requestId) || (deviceId && r.deviceId === deviceId && r.status === 'allowed')
-    );
-
-    if (existingReq) {
-      return res.json({ success: true, request: existingReq });
+    // Strictly check by requestId if supplied (Never allow past permissions to grant blanket access!)
+    if (requestId) {
+      const existingReq = patient.accessRequests.find((r: any) => r.id === requestId);
+      if (existingReq) {
+        return res.json({ success: true, request: existingReq });
+      }
     }
 
     const newRequest = {
-      id: requestId || `req-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      id: requestId || `req-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
       patientId: patient.id,
       requesterName: requesterName || 'Emergency Physician',
       requesterRole: requesterRole || 'Clinical Doctor',
@@ -192,23 +244,36 @@ async function startServer() {
     patient.accessRequests.unshift(newRequest);
     saveDiskPatients(patientsStore);
 
-    console.log(`[QR Access] New scan access request for patient ${patient.id} (${patient.name}) from ${newRequest.requesterName}`);
+    console.log(`[QR Access] New unique scan request ${newRequest.id} for patient ${patient.id} (${patient.name}) from ${newRequest.requesterName}`);
+
+    // Instant SSE push to patient listening connections (one scan = one immediate notification alert!)
+    const patientConns = patientSseClients.get(patient.id) || [];
+    for (const conn of patientConns) {
+      try {
+        conn.write(`data: ${JSON.stringify({ type: 'NEW_REQUEST_ALERT', request: newRequest, requests: patient.accessRequests })}\n\n`);
+      } catch {
+        // ignore
+      }
+    }
+
     res.json({ success: true, request: newRequest });
   });
 
   // Check authorization status for a scanner request
+  // Strictly enforce 1-to-1 matching by requestId. Do NOT grant blanket access to other scans!
   app.get("/api/qr-access/status", (req, res) => {
-    const { patientId, requestId, deviceId, qrToken } = req.query;
+    const { patientId, requestId, qrToken } = req.query;
     const patient = patientsStore.find(p => (patientId && p.id === patientId) || (qrToken && p.qrToken === qrToken));
     if (!patient) {
       return res.status(404).json({ success: false, message: "Patient not found" });
     }
 
     const requests = patient.accessRequests || [];
-    const found = requests.find((r: any) => 
-      (requestId && r.id === requestId) || 
-      (deviceId && r.deviceId === deviceId)
-    );
+    if (!requestId) {
+      return res.json({ success: true, status: 'none' });
+    }
+
+    const found = requests.find((r: any) => r.id === requestId);
 
     if (!found) {
       return res.json({ success: true, status: 'none' });
@@ -238,7 +303,28 @@ async function startServer() {
     reqItem.respondedAt = new Date().toISOString();
     saveDiskPatients(patientsStore);
 
-    console.log(`[QR Access] Patient ${patient.id} marked request ${requestId} as ${reqItem.status}`);
+    console.log(`[QR Access] Patient ${patient.id} responded to request ${requestId}: ${reqItem.status}`);
+
+    // Instant SSE push to the waiting scanner with this specific requestId
+    const waitingScanners = scannerSseClients.get(requestId) || [];
+    for (const conn of waitingScanners) {
+      try {
+        conn.write(`data: ${JSON.stringify({ type: 'DECISION', requestId, status: reqItem.status })}\n\n`);
+      } catch {
+        // ignore
+      }
+    }
+
+    // Also notify any patient SSE listeners
+    const patientConns = patientSseClients.get(patient.id) || [];
+    for (const conn of patientConns) {
+      try {
+        conn.write(`data: ${JSON.stringify({ type: 'REQUESTS_UPDATED', requests: patient.accessRequests })}\n\n`);
+      } catch {
+        // ignore
+      }
+    }
+
     res.json({ success: true, request: reqItem, accessRequests: patient.accessRequests });
   });
 

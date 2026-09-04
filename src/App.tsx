@@ -5,7 +5,7 @@ import {
   STORAGE_KEY_ACTIVE_USER,
   INITIAL_PATIENTS 
 } from './data/initialData';
-import { Patient, BloodType, Allergy, Vaccination, MedicalRecord } from './types';
+import { Patient, BloodType, Allergy, Vaccination, MedicalRecord, QrAccessRequest } from './types';
 import { parseCompactPatientPayload } from './utils/qrPayload';
 import { fetchPatientFromServer, savePatientToServer, syncPatientsWithServer, mergePatientRecords } from './utils/patientSync';
 import { savePatientsToIDB, loadPatientsFromIDB, saveSinglePatientToIDB, saveSingleRecordToIDB } from './utils/idbStorage';
@@ -32,7 +32,7 @@ import { MedicalSummaryPDF } from './components/MedicalSummaryPDF';
 import { DoctorMedicalRecordView } from './components/DoctorMedicalRecordView';
 import { DoctorAdmitGate } from './components/DoctorAdmitGate';
 import { AccessRequestsNotificationModal } from './components/AccessRequestsNotificationModal';
-import { subscribeToIncomingRequests } from './utils/qrAccessManager';
+import { subscribeToIncomingRequests, updateQrAccessDecision } from './utils/qrAccessManager';
 import { QRCodeTab } from './components/QRCodeTab';
 import { AuthPage } from './components/AuthPage';
 import { 
@@ -45,7 +45,7 @@ import {
   EditProfileFormData
 } from './components/Modals';
 import { LanguageProvider, useLanguage } from './context/LanguageContext';
-import { HelpCircle, CheckCircle, FileText, AlertTriangle } from 'lucide-react';
+import { HelpCircle, CheckCircle, FileText, AlertTriangle, Bell, Check, Ban, X } from 'lucide-react';
 
 function parseUrlScanContext(): {
   isDoctorView: boolean;
@@ -216,6 +216,7 @@ function DashboardContent() {
   const [initialUploadFile, setInitialUploadFile] = useState<File | null>(null);
   const [viewerRecord, setViewerRecord] = useState<MedicalRecord | null>(null);
   const [notificationsModalOpen, setNotificationsModalOpen] = useState(false);
+  const [activeScanAlert, setActiveScanAlert] = useState<QrAccessRequest | null>(null);
 
   // Listen to Firebase Authentication state changes
   useEffect(() => {
@@ -479,7 +480,7 @@ function DashboardContent() {
   useEffect(() => {
     if (!currentPatient?.id || isDoctorViewOpen) return;
 
-    const unsubscribe = subscribeToIncomingRequests(currentPatient.id, (freshRequests) => {
+    const unsubscribe = subscribeToIncomingRequests(currentPatient.id, (freshRequests, isNewAlert) => {
       setPatients((prev) => {
         const idx = prev.findIndex((p) => p.id === currentPatient.id);
         if (idx >= 0) {
@@ -493,10 +494,38 @@ function DashboardContent() {
         }
         return prev;
       });
+
+      // Exactly ONE scan triggers ONE instant notification alert!
+      if (isNewAlert) {
+        const latestPending = freshRequests.find((r) => r.status === 'pending');
+        if (latestPending) {
+          setActiveScanAlert(latestPending);
+        }
+      }
     });
 
     return () => unsubscribe();
   }, [currentPatient?.id, isDoctorViewOpen]);
+
+  // Instant one-click decision from the scan notification alert banner
+  const handleQuickDecision = async (decision: 'allowed' | 'not_allowed') => {
+    if (!activeScanAlert || !currentPatient) return;
+    const reqId = activeScanAlert.id;
+    setActiveScanAlert(null);
+
+    // 1. Immediately update local patient state
+    updateCurrentPatient((p) => ({
+      ...p,
+      accessRequests: (p.accessRequests || []).map((r) =>
+        r.id === reqId
+          ? { ...r, status: decision, respondedAt: new Date().toISOString() }
+          : r
+      ),
+    }));
+
+    // 2. Immediately push decision to server and BroadcastChannel with zero wait
+    await updateQrAccessDecision(currentPatient.id, reqId, decision);
+  };
 
   const handleSyncData = async (): Promise<boolean> => {
     try {
@@ -1132,6 +1161,75 @@ function DashboardContent() {
           updateCurrentPatient(() => updatedPatient);
         }}
       />
+
+      {/* Real-time One-Scan Instant Notification Banner / Alert */}
+      {activeScanAlert && !isDoctorViewOpen && (
+        <div className="fixed bottom-6 right-4 sm:right-6 z-50 max-w-md w-[calc(100%-2rem)] animate-in slide-in-from-bottom-5 fade-in duration-300">
+          <div className="bg-slate-900/95 backdrop-blur-md text-white border-2 border-teal-500 rounded-3xl p-5 shadow-2xl space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-teal-500/20 text-teal-400 border border-teal-500/40 flex items-center justify-center animate-pulse">
+                  <Bell className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                    <span className="text-xs font-bold uppercase tracking-wider text-teal-400">
+                      QR Code Scanned
+                    </span>
+                  </div>
+                  <h4 className="text-sm font-black text-white">
+                    {activeScanAlert.requesterName}
+                  </h4>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveScanAlert(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                title="Dismiss"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              <strong>{activeScanAlert.requesterRole}</strong> from <em>{activeScanAlert.requesterLocation}</em> scanned your medical QR code and requested permission to view your medical records.
+            </p>
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => handleQuickDecision('allowed')}
+                className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition-all shadow-md active:scale-95 cursor-pointer"
+              >
+                <Check className="w-4 h-4" />
+                <span>Allow Immediately</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleQuickDecision('not_allowed')}
+                className="inline-flex items-center justify-center gap-1 py-2.5 px-3 bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-800 text-xs font-bold rounded-xl transition-all active:scale-95 cursor-pointer"
+              >
+                <Ban className="w-3.5 h-3.5" />
+                <span>Deny</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveScanAlert(null);
+                  setNotificationsModalOpen(true);
+                }}
+                className="text-[11px] font-semibold text-slate-400 hover:text-white px-2 py-1 underline transition-colors cursor-pointer"
+              >
+                Details
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Help & Privacy Guide Modal */}
       {showHelpGuide && (

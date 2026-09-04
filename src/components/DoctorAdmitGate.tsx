@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Patient, QrAccessStatus } from '../types';
 import { useLanguage } from '../context/LanguageContext';
+import { DoctorMedicalRecordView } from './DoctorMedicalRecordView';
 import {
   submitQrAccessRequest,
   checkQrAccessStatus,
   subscribeToAccessDecision,
   getSavedRequestIdForPatient,
-  getOrCreateDeviceId,
 } from '../utils/qrAccessManager';
 import {
   Shield,
@@ -25,14 +25,16 @@ import {
 
 interface DoctorAdmitGateProps {
   patient: Patient;
-  onAdmitted: () => void;
+  onAdmitted?: () => void;
   onExit: () => void;
+  children?: React.ReactNode;
 }
 
 export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
   patient,
   onAdmitted,
   onExit,
+  children,
 }) => {
   const { t } = useLanguage();
   const [requesterName, setRequesterName] = useState('Dr. Sothea / Emergency Physician');
@@ -43,33 +45,11 @@ export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
 
-  // Initial check on mount to see if this device is already admitted or has a pending request
+  // Initial check on mount: strictly verify if THIS session has a specific saved request ID that was allowed
   useEffect(() => {
     let isMounted = true;
 
     const initCheck = async () => {
-      // 1. Check existing requests in patient object if present
-      const deviceId = getOrCreateDeviceId();
-      const existingReq = patient.accessRequests?.find(
-        (r) => r.deviceId === deviceId || (activeRequestId && r.id === activeRequestId)
-      );
-
-      if (existingReq) {
-        if (existingReq.status === 'allowed') {
-          if (isMounted) {
-            setRequestStatus('allowed');
-            setTimeout(() => onAdmitted(), 400);
-          }
-          return;
-        } else if (existingReq.status === 'pending') {
-          if (isMounted) {
-            setActiveRequestId(existingReq.id);
-            setRequestStatus('pending');
-          }
-        }
-      }
-
-      // 2. Check saved request in localStorage or server
       const savedReqId = getSavedRequestIdForPatient(patient.id);
       if (savedReqId) {
         if (isMounted) setActiveRequestId(savedReqId);
@@ -82,7 +62,7 @@ export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
         if (isMounted) {
           if (serverStatus === 'allowed') {
             setRequestStatus('allowed');
-            setTimeout(() => onAdmitted(), 400);
+            onAdmitted?.();
           } else if (serverStatus === 'pending') {
             setRequestStatus('pending');
           } else if (serverStatus === 'not_allowed') {
@@ -97,21 +77,20 @@ export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [patient.id]);
+  }, [patient.id, patient.qrToken, onAdmitted]);
 
-  // Subscribe to real-time decisions via BroadcastChannel, storage events, and polling
+  // Subscribe to real-time decisions via SSE, BroadcastChannel, and fast polling
   useEffect(() => {
-    if (requestStatus !== 'pending') return;
+    if (requestStatus !== 'pending' || !activeRequestId) return;
 
     const unsubscribe = subscribeToAccessDecision(
       patient.id,
       activeRequestId,
       (newStatus: QrAccessStatus) => {
         if (newStatus === 'allowed') {
+          // Zero delay! Immediately reveal Doctor Portal
           setRequestStatus('allowed');
-          setTimeout(() => {
-            onAdmitted();
-          }, 600);
+          onAdmitted?.();
         } else if (newStatus === 'not_allowed') {
           setRequestStatus('not_allowed');
         }
@@ -147,26 +126,36 @@ export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
   };
 
   const handleManualCheck = async () => {
+    if (!activeRequestId) return;
     setIsChecking(true);
     try {
       const status = await checkQrAccessStatus({
         patientId: patient.id,
-        requestId: activeRequestId || undefined,
+        requestId: activeRequestId,
         qrToken: patient.qrToken,
       });
 
       if (status === 'allowed') {
         setRequestStatus('allowed');
-        setTimeout(() => onAdmitted(), 400);
+        onAdmitted?.();
       } else if (status === 'not_allowed') {
         setRequestStatus('not_allowed');
       }
     } catch {
       // ignore
     } finally {
-      setTimeout(() => setIsChecking(false), 500);
+      setTimeout(() => setIsChecking(false), 400);
     }
   };
+
+  // Immediate full doctor portal reveal once allowed! No waiting, no loading delay.
+  if (requestStatus === 'allowed') {
+    return (
+      <>
+        {children || <DoctorMedicalRecordView patient={patient} onExit={onExit} />}
+      </>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col justify-center items-center p-4 sm:p-6 relative overflow-hidden">
