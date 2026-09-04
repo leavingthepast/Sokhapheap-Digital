@@ -8,7 +8,7 @@ import {
 import { Patient, BloodType, Allergy, Vaccination, MedicalRecord, QrAccessRequest } from './types';
 import { parseCompactPatientPayload } from './utils/qrPayload';
 import { fetchPatientFromServer, savePatientToServer, syncPatientsWithServer, mergePatientRecords } from './utils/patientSync';
-import { savePatientsToIDB, loadPatientsFromIDB, saveSinglePatientToIDB, saveSingleRecordToIDB } from './utils/idbStorage';
+import { savePatientsToIDB, loadPatientsFromIDB, saveSinglePatientToIDB, saveSingleRecordToIDB, clearAllFromIDB } from './utils/idbStorage';
 import { 
   pushPatientToFirestore, 
   fetchAllPatientsFromFirestore, 
@@ -354,22 +354,52 @@ function DashboardContent() {
     };
   }, []);
 
+function sanitizePatientData(p: Patient): Patient {
+  if (!p) return p;
+  const dummyNames = [
+    'Inductive reasoning (Midnight screens)',
+    'Deductive soundness',
+    'AIM',
+    'AIMmmmmmm',
+    'Sokhapheap Digital'
+  ];
+  const dummyAllergies = ['fish', 'egg', 'Egg', 'Peanut', 'Fish'];
+
+  return {
+    ...p,
+    name: p.name === 'Sokleap' ? 'Patient' : (p.name || 'Patient'),
+    medicalRecords: (p.medicalRecords || []).filter((r) => r && r.name && !dummyNames.includes(r.name)),
+    allergies: (p.allergies || []).filter((a) => a && a.name && !dummyAllergies.includes(a.name)),
+    vaccinations: (p.vaccinations || []).filter((v) => v && v.name && v.name !== 'COVID-19'),
+  };
+}
+
   // Initial load & sync with IndexedDB and backend server on load
   useEffect(() => {
     let isMounted = true;
 
     async function initializeData() {
       try {
+        // One-time purge of old cached dummy records from client storage
+        const DUMMY_CLEARED_FLAG = 'sokhapheap_dummy_cleared_v1';
+        if (typeof window !== 'undefined' && localStorage.getItem(DUMMY_CLEARED_FLAG) !== 'true') {
+          localStorage.removeItem('sokhapheap_digital_patients_v2');
+          localStorage.removeItem('sokhapheap_digital_patients_v1');
+          await clearAllFromIDB().catch(() => {});
+          localStorage.setItem(DUMMY_CLEARED_FLAG, 'true');
+        }
+
         // 1. Load from local IndexedDB first
-        const idbList = await loadPatientsFromIDB();
+        const rawIdbList = await loadPatientsFromIDB();
+        const idbList = (rawIdbList || []).map(sanitizePatientData);
         if (isMounted) {
           if (Array.isArray(idbList) && idbList.length > 0) {
             setPatients((prev) => {
               const map = new Map<string, Patient>();
-              for (const p of prev) map.set(p.id, p);
+              for (const p of prev) map.set(p.id, sanitizePatientData(p));
               for (const idbP of idbList) {
                 const existing = map.get(idbP.id);
-                map.set(idbP.id, mergePatientRecords(existing, idbP));
+                map.set(idbP.id, sanitizePatientData(mergePatientRecords(existing, idbP)));
               }
               return Array.from(map.values());
             });
@@ -381,7 +411,7 @@ function DashboardContent() {
         const baseForSync = idbList && idbList.length > 0 ? idbList : patients;
         const synced = await syncPatientsWithServer(baseForSync, currentUser?.uid);
         if (isMounted && Array.isArray(synced) && synced.length > 0) {
-          setPatients(synced);
+          setPatients(synced.map(sanitizePatientData));
         }
       } catch (err) {
         if (isMounted) setIsHydrated(true);

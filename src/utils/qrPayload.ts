@@ -1,5 +1,4 @@
 import { Patient, MedicalRecord, Allergy, Vaccination, IllnessHistoryItem, LabResultItem } from '../types';
-import { INITIAL_PATIENTS } from '../data/initialData';
 
 // Public Cloud Run domain for multi-device scanning (works from any external phone/tablet)
 export const CLOUD_DEPLOYED_URL = 'https://ais-pre-wun6t2kzqwnrzhf6l4uamt-34901302090.asia-southeast1.run.app';

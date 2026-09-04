@@ -195,3 +195,21 @@ export async function loadPatientsFromIDB(): Promise<Patient[]> {
     return [];
   }
 }
+
+/**
+ * Clear all records and patients from IndexedDB
+ */
+export async function clearAllFromIDB(): Promise<void> {
+  try {
+    const db = await openDatabase();
+    const tx = db.transaction([STORE_PATIENTS, STORE_RECORDS], 'readwrite');
+    tx.objectStore(STORE_PATIENTS).clear();
+    tx.objectStore(STORE_RECORDS).clear();
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (err) {
+    console.warn('IndexedDB clearAll error:', err);
+  }
+}

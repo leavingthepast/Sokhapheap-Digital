@@ -25,7 +25,7 @@ export const INITIAL_PATIENTS: Patient[] = [
   },
 ];
 
-export const STORAGE_KEY_PATIENTS = 'sokhapheap_digital_patients_v2';
+export const STORAGE_KEY_PATIENTS = 'sokhapheap_digital_patients_v3';
 export const STORAGE_KEY_ACTIVE_USER = 'sokhapheap_digital_active_email_v2';
 
 export function getStoredPatients(): Patient[] {

@@ -1,4 +1,5 @@
 import { QrAccessRequest, QrAccessStatus, Patient } from '../types';
+import { STORAGE_KEY_PATIENTS } from '../data/initialData';
 
 const ACCESS_CHANNEL_NAME = 'sokhapheap_qr_access_channel';
 const STORAGE_DEVICE_KEY = 'sokhapheap_scanner_device_id';
@@ -157,7 +158,7 @@ export async function checkQrAccessStatus(params: {
 
   // 2. Check local stored patients if on same device/browser
   try {
-    const storedRaw = localStorage.getItem('sokhapheap_digital_patients_v2');
+    const storedRaw = localStorage.getItem(STORAGE_KEY_PATIENTS);
     if (storedRaw) {
       const patients: Patient[] = JSON.parse(storedRaw);
       const matchPatient = patients.find(p => p.id === params.patientId || (params.qrToken && p.qrToken === params.qrToken));
@@ -187,7 +188,7 @@ export async function updateQrAccessDecision(
 
   // 1. Immediately update local stored patient object so any tab reading localStorage sees it
   try {
-    const raw = localStorage.getItem('sokhapheap_digital_patients_v2');
+    const raw = localStorage.getItem(STORAGE_KEY_PATIENTS);
     if (raw) {
       const patients: any[] = JSON.parse(raw);
       const matchPatient = patients.find((p: any) => p.id === patientId);
@@ -209,7 +210,7 @@ export async function updateQrAccessDecision(
             requesterName: 'Clinical Doctor',
           });
         }
-        localStorage.setItem('sokhapheap_digital_patients_v2', JSON.stringify(patients));
+        localStorage.setItem(STORAGE_KEY_PATIENTS, JSON.stringify(patients));
       }
     }
   } catch {

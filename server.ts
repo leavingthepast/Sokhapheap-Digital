@@ -32,6 +32,39 @@ const DATA_DIR = path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'patients.json');
 const DATA_REQUESTS_FILE = path.join(DATA_DIR, 'access_requests.json');
 
+// Sanitize patient object to ensure no dummy test data persists
+function sanitizePatient(p: any): any {
+  if (!p || typeof p !== 'object') return p;
+  const dummyNames = [
+    'Inductive reasoning (Midnight screens)',
+    'Deductive soundness',
+    'AIM',
+    'AIMmmmmmm',
+    'Sokhapheap Digital'
+  ];
+  const dummyAllergies = ['fish', 'egg', 'Egg', 'Peanut', 'Fish'];
+
+  const cleanedRecords = Array.isArray(p.medicalRecords)
+    ? p.medicalRecords.filter((r: any) => r && r.name && !dummyNames.includes(r.name))
+    : [];
+
+  const cleanedAllergies = Array.isArray(p.allergies)
+    ? p.allergies.filter((a: any) => a && a.name && !dummyAllergies.includes(a.name))
+    : [];
+
+  const cleanedVaccinations = Array.isArray(p.vaccinations)
+    ? p.vaccinations.filter((v: any) => v && v.name && v.name !== 'COVID-19')
+    : [];
+
+  return {
+    ...p,
+    name: p.name === 'Sokleap' ? 'Patient' : (p.name || 'Patient'),
+    medicalRecords: cleanedRecords,
+    allergies: cleanedAllergies,
+    vaccinations: cleanedVaccinations,
+  };
+}
+
 // Helper to load persistent patient store from disk
 function loadDiskPatients(): any[] {
   try {
@@ -42,13 +75,13 @@ function loadDiskPatients(): any[] {
       const raw = fs.readFileSync(DATA_FILE, 'utf-8');
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        return parsed.map(sanitizePatient);
       }
     }
   } catch (err) {
     console.warn('Notice: loading patients from disk:', err);
   }
-  return [...INITIAL_SERVER_PATIENTS];
+  return INITIAL_SERVER_PATIENTS.map(sanitizePatient);
 }
 
 // Helper to save patient store to disk
@@ -161,17 +194,18 @@ async function startServer() {
 
   // Save or update a single patient record (including uploaded medical documents)
   app.post("/api/patient", (req, res) => {
-    const updatedPatient = req.body;
-    if (!updatedPatient || !updatedPatient.id) {
+    const rawPatient = req.body;
+    if (!rawPatient || !rawPatient.id) {
       return res.status(400).json({ success: false, message: "Invalid patient payload" });
     }
+    const updatedPatient = sanitizePatient(rawPatient);
 
     const existingIndex = patientsStore.findIndex(p => p.id === updatedPatient.id);
     if (existingIndex >= 0) {
       patientsStore[existingIndex] = {
         ...patientsStore[existingIndex],
         ...updatedPatient,
-        medicalRecords: updatedPatient.medicalRecords || patientsStore[existingIndex].medicalRecords,
+        medicalRecords: updatedPatient.medicalRecords || [],
         accessRequests: updatedPatient.accessRequests || patientsStore[existingIndex].accessRequests || []
       };
     } else {
@@ -343,8 +377,9 @@ async function startServer() {
 
   // Patient responds to access request (Allow or Not Allowed)
   app.post("/api/qr-access/respond", (req, res) => {
-    const { patientId, requestId, status } = req.body;
-    const normalizedStatus = status === 'allowed' ? 'allowed' : 'not_allowed';
+    const { patientId, requestId, status, decision } = req.body;
+    const finalDecision = status || decision;
+    const normalizedStatus = finalDecision === 'allowed' ? 'allowed' : 'not_allowed';
     const nowIso = new Date().toISOString();
 
     let targetReq = accessRequestsStore.get(requestId);
@@ -454,22 +489,42 @@ async function startServer() {
     const { patients } = req.body;
     if (Array.isArray(patients) && patients.length > 0) {
       patients.forEach(newP => {
-        const idx = patientsStore.findIndex(p => p.id === newP.id);
+        const cleanP = sanitizePatient(newP);
+        const idx = patientsStore.findIndex(p => p.id === cleanP.id);
         if (idx >= 0) {
-          // Merge preserving existing documents
+          // Merge record updates cleanly
           patientsStore[idx] = {
             ...patientsStore[idx],
-            ...newP,
-            medicalRecords: newP.medicalRecords && newP.medicalRecords.length > 0 ? newP.medicalRecords : patientsStore[idx].medicalRecords,
+            ...cleanP,
+            medicalRecords: Array.isArray(cleanP.medicalRecords) ? cleanP.medicalRecords : [],
           };
         } else {
-          patientsStore.push(newP);
+          patientsStore.push(cleanP);
         }
       });
       saveDiskPatients(patientsStore);
       return res.json({ success: true, count: patientsStore.length, data: patientsStore });
     }
     res.json({ success: true, data: patientsStore });
+  });
+
+  // Clear dummy data endpoint
+  app.post("/api/admin/clear-dummy-data", (req, res) => {
+    patientsStore = patientsStore.map((p) => ({
+      ...p,
+      medicalRecords: [],
+      allergies: [],
+      vaccinations: [],
+      illnessHistory: [],
+      labResults: [],
+      accessRequests: [],
+      profilePicture: undefined,
+      bloodType: p.bloodType === 'O+' || p.bloodType === 'B+' ? 'Unknown' : p.bloodType,
+    }));
+    accessRequestsStore.clear();
+    saveDiskPatients(patientsStore);
+    saveDiskRequests(accessRequestsStore);
+    res.json({ success: true, message: "Dummy data cleared", patients: patientsStore });
   });
 
   // Vite middleware setup for SPA
