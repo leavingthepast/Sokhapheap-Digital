@@ -44,13 +44,22 @@ export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
+  const [freshPatientData, setFreshPatientData] = useState<Patient | null>(null);
 
   // Initial check on mount: strictly verify if THIS session has a specific saved request ID that was allowed
   useEffect(() => {
     let isMounted = true;
 
     const initCheck = async () => {
-      const savedReqId = getSavedRequestIdForPatient(patient.id);
+      let savedReqId = getSavedRequestIdForPatient(patient.id);
+      if (!savedReqId) {
+        try {
+          savedReqId = localStorage.getItem('sokhapheap_admitted_req_' + patient.id);
+        } catch {
+          // ignore
+        }
+      }
+
       if (savedReqId) {
         if (isMounted) setActiveRequestId(savedReqId);
         const serverStatus = await checkQrAccessStatus({
@@ -79,6 +88,32 @@ export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
     };
   }, [patient.id, patient.qrToken, onAdmitted]);
 
+  // When admitted, fetch full fresh records for the doctor view
+  useEffect(() => {
+    if (requestStatus !== 'allowed') return;
+    let isMounted = true;
+
+    const loadFreshPatient = async () => {
+      try {
+        const query = patient.id ? `id=${encodeURIComponent(patient.id)}` : `token=${encodeURIComponent(patient.qrToken || '')}`;
+        const res = await fetch(`/api/patient?${query}`);
+        if (res.ok) {
+          const json = await res.json();
+          if (isMounted && json.success && json.data) {
+            setFreshPatientData(json.data);
+          }
+        }
+      } catch {
+        // fallback to prop patient
+      }
+    };
+
+    loadFreshPatient();
+    return () => {
+      isMounted = false;
+    };
+  }, [requestStatus, patient.id, patient.qrToken]);
+
   // Subscribe to real-time decisions via SSE, BroadcastChannel, and fast polling
   useEffect(() => {
     if (requestStatus !== 'pending' || !activeRequestId) return;
@@ -89,6 +124,13 @@ export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
       (newStatus: QrAccessStatus) => {
         if (newStatus === 'allowed') {
           // Zero delay! Immediately reveal Doctor Portal
+          try {
+            if (activeRequestId) {
+              localStorage.setItem('sokhapheap_admitted_req_' + patient.id, activeRequestId);
+            }
+          } catch {
+            // ignore
+          }
           setRequestStatus('allowed');
           onAdmitted?.();
         } else if (newStatus === 'not_allowed') {
@@ -136,6 +178,11 @@ export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
       });
 
       if (status === 'allowed') {
+        try {
+          localStorage.setItem('sokhapheap_admitted_req_' + patient.id, activeRequestId);
+        } catch {
+          // ignore
+        }
         setRequestStatus('allowed');
         onAdmitted?.();
       } else if (status === 'not_allowed') {
@@ -144,15 +191,16 @@ export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
     } catch {
       // ignore
     } finally {
-      setTimeout(() => setIsChecking(false), 400);
+      setTimeout(() => setIsChecking(false), 300);
     }
   };
 
   // Immediate full doctor portal reveal once allowed! No waiting, no loading delay.
   if (requestStatus === 'allowed') {
+    const displayPatient = freshPatientData || patient;
     return (
       <>
-        {children || <DoctorMedicalRecordView patient={patient} onExit={onExit} />}
+        {children || <DoctorMedicalRecordView patient={displayPatient} onExit={onExit} />}
       </>
     );
   }

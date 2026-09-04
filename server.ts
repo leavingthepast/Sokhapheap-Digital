@@ -30,6 +30,7 @@ const INITIAL_SERVER_PATIENTS = [
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'patients.json');
+const DATA_REQUESTS_FILE = path.join(DATA_DIR, 'access_requests.json');
 
 // Helper to load persistent patient store from disk
 function loadDiskPatients(): any[] {
@@ -62,8 +63,42 @@ function saveDiskPatients(patients: any[]): void {
   }
 }
 
+// Helper to load persistent QR access requests from disk
+function loadDiskRequests(): Map<string, any> {
+  const map = new Map<string, any>();
+  try {
+    if (fs.existsSync(DATA_REQUESTS_FILE)) {
+      const raw = fs.readFileSync(DATA_REQUESTS_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((req: any) => {
+          if (req && req.id) map.set(req.id, req);
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('Notice: loading requests from disk:', err);
+  }
+  return map;
+}
+
+// Helper to save QR access requests to disk
+function saveDiskRequests(requestsMap: Map<string, any>): void {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    const arr = Array.from(requestsMap.values());
+    fs.writeFileSync(DATA_REQUESTS_FILE, JSON.stringify(arr, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('Notice: saving requests to disk:', err);
+  }
+}
+
 // Patient store across mobile and desktop devices with disk persistence
 let patientsStore: any[] = loadDiskPatients();
+// Global access requests map indexed by requestId
+const accessRequestsStore: Map<string, any> = loadDiskRequests();
 
 async function startServer() {
   const app = express();
@@ -211,25 +246,37 @@ async function startServer() {
       return res.status(400).json({ success: false, message: "Missing patient identifier" });
     }
 
-    const patient = patientsStore.find(p => (patientId && p.id === patientId) || (qrToken && p.qrToken === qrToken));
+    const resolvedPatientId = patientId || (qrToken ? `pat-${qrToken}` : `pat-${Date.now()}`);
+    let patient = patientsStore.find(p => (patientId && p.id === patientId) || (qrToken && p.qrToken === qrToken));
     if (!patient) {
-      return res.status(404).json({ success: false, message: "Patient not found" });
+      // Create patient stub so it exists and can be looked up
+      patient = {
+        id: resolvedPatientId,
+        name: 'Patient',
+        qrToken: qrToken || `TOK-${Date.now()}`,
+        accessRequests: [],
+      };
+      patientsStore.push(patient);
+      saveDiskPatients(patientsStore);
     }
 
     if (!Array.isArray(patient.accessRequests)) {
       patient.accessRequests = [];
     }
 
+    const effectiveReqId = requestId || `req-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+
     // Strictly check by requestId if supplied (Never allow past permissions to grant blanket access!)
     if (requestId) {
-      const existingReq = patient.accessRequests.find((r: any) => r.id === requestId);
+      const existingReq = accessRequestsStore.get(requestId) || patient.accessRequests.find((r: any) => r.id === requestId);
       if (existingReq) {
+        accessRequestsStore.set(existingReq.id, existingReq);
         return res.json({ success: true, request: existingReq });
       }
     }
 
     const newRequest = {
-      id: requestId || `req-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+      id: effectiveReqId,
       patientId: patient.id,
       requesterName: requesterName || 'Emergency Physician',
       requesterRole: requesterRole || 'Clinical Doctor',
@@ -240,7 +287,11 @@ async function startServer() {
       deviceId: deviceId || `dev-${Math.random().toString(36).substring(2, 8)}`,
     };
 
-    // Insert at beginning of requests list
+    // Store in global accessRequestsStore
+    accessRequestsStore.set(newRequest.id, newRequest);
+    saveDiskRequests(accessRequestsStore);
+
+    // Also unshift in patient's accessRequests
     patient.accessRequests.unshift(newRequest);
     saveDiskPatients(patientsStore);
 
@@ -263,79 +314,139 @@ async function startServer() {
   // Strictly enforce 1-to-1 matching by requestId. Do NOT grant blanket access to other scans!
   app.get("/api/qr-access/status", (req, res) => {
     const { patientId, requestId, qrToken } = req.query;
-    const patient = patientsStore.find(p => (patientId && p.id === patientId) || (qrToken && p.qrToken === qrToken));
-    if (!patient) {
-      return res.status(404).json({ success: false, message: "Patient not found" });
-    }
+    const reqIdStr = requestId ? String(requestId) : null;
 
-    const requests = patient.accessRequests || [];
-    if (!requestId) {
+    if (!reqIdStr) {
       return res.json({ success: true, status: 'none' });
     }
 
-    const found = requests.find((r: any) => r.id === requestId);
-
-    if (!found) {
-      return res.json({ success: true, status: 'none' });
+    // 1. Check in global accessRequestsStore first (immediate source of truth)
+    const directReq = accessRequestsStore.get(reqIdStr);
+    if (directReq) {
+      return res.json({ success: true, status: directReq.status, request: directReq });
     }
 
-    res.json({ success: true, status: found.status, request: found });
+    // 2. Check in patientsStore
+    for (const p of patientsStore) {
+      if (Array.isArray(p.accessRequests)) {
+        const found = p.accessRequests.find((r: any) => r.id === reqIdStr);
+        if (found) {
+          accessRequestsStore.set(found.id, found);
+          return res.json({ success: true, status: found.status, request: found });
+        }
+      }
+    }
+
+    // Default status if request is registered but not found in memory
+    res.json({ success: true, status: 'pending' });
   });
 
   // Patient responds to access request (Allow or Not Allowed)
   app.post("/api/qr-access/respond", (req, res) => {
     const { patientId, requestId, status } = req.body;
-    const patient = patientsStore.find(p => p.id === patientId);
-    if (!patient) {
-      return res.status(404).json({ success: false, message: "Patient not found" });
+    const normalizedStatus = status === 'allowed' ? 'allowed' : 'not_allowed';
+    const nowIso = new Date().toISOString();
+
+    let targetReq = accessRequestsStore.get(requestId);
+
+    // Also search patientsStore
+    let foundPatient = patientsStore.find(p => p.id === patientId);
+    if (!foundPatient) {
+      // Find patient containing this request
+      foundPatient = patientsStore.find(p => Array.isArray(p.accessRequests) && p.accessRequests.some((r: any) => r.id === requestId));
     }
 
-    if (!Array.isArray(patient.accessRequests)) {
-      patient.accessRequests = [];
+    if (foundPatient) {
+      if (!Array.isArray(foundPatient.accessRequests)) {
+        foundPatient.accessRequests = [];
+      }
+      const existingInPatient = foundPatient.accessRequests.find((r: any) => r.id === requestId);
+      if (existingInPatient) {
+        existingInPatient.status = normalizedStatus;
+        existingInPatient.respondedAt = nowIso;
+        targetReq = existingInPatient;
+      } else if (targetReq) {
+        targetReq.status = normalizedStatus;
+        targetReq.respondedAt = nowIso;
+        foundPatient.accessRequests.unshift(targetReq);
+      }
+      saveDiskPatients(patientsStore);
     }
 
-    const reqItem = patient.accessRequests.find((r: any) => r.id === requestId);
-    if (!reqItem) {
-      return res.status(404).json({ success: false, message: "Request not found" });
+    if (!targetReq) {
+      targetReq = {
+        id: requestId,
+        patientId: patientId || 'patient',
+        status: normalizedStatus,
+        respondedAt: nowIso,
+      };
+    } else {
+      targetReq.status = normalizedStatus;
+      targetReq.respondedAt = nowIso;
     }
 
-    reqItem.status = status === 'allowed' ? 'allowed' : 'not_allowed';
-    reqItem.respondedAt = new Date().toISOString();
-    saveDiskPatients(patientsStore);
+    accessRequestsStore.set(requestId, targetReq);
+    saveDiskRequests(accessRequestsStore);
 
-    console.log(`[QR Access] Patient ${patient.id} responded to request ${requestId}: ${reqItem.status}`);
+    console.log(`[QR Access] Request ${requestId} marked ${normalizedStatus}`);
 
     // Instant SSE push to the waiting scanner with this specific requestId
     const waitingScanners = scannerSseClients.get(requestId) || [];
     for (const conn of waitingScanners) {
       try {
-        conn.write(`data: ${JSON.stringify({ type: 'DECISION', requestId, status: reqItem.status })}\n\n`);
+        conn.write(`data: ${JSON.stringify({ type: 'DECISION', requestId, status: normalizedStatus })}\n\n`);
       } catch {
         // ignore
       }
     }
 
     // Also notify any patient SSE listeners
-    const patientConns = patientSseClients.get(patient.id) || [];
-    for (const conn of patientConns) {
-      try {
-        conn.write(`data: ${JSON.stringify({ type: 'REQUESTS_UPDATED', requests: patient.accessRequests })}\n\n`);
-      } catch {
-        // ignore
+    const targetPatientId = patientId || (targetReq && targetReq.patientId);
+    if (targetPatientId) {
+      const patientConns = patientSseClients.get(targetPatientId) || [];
+      const allForPatient = Array.from(accessRequestsStore.values()).filter((r: any) => r.patientId === targetPatientId);
+      for (const conn of patientConns) {
+        try {
+          conn.write(`data: ${JSON.stringify({ type: 'REQUESTS_UPDATED', requests: allForPatient })}\n\n`);
+        } catch {
+          // ignore
+        }
       }
     }
 
-    res.json({ success: true, request: reqItem, accessRequests: patient.accessRequests });
+    res.json({ success: true, request: targetReq });
   });
 
   // Get all access requests for a patient
   app.get("/api/qr-access/requests", (req, res) => {
     const { patientId } = req.query;
-    const patient = patientsStore.find(p => p.id === patientId);
-    if (!patient) {
-      return res.status(404).json({ success: false, message: "Patient not found" });
-    }
-    res.json({ success: true, requests: patient.accessRequests || [] });
+    const pIdStr = patientId ? String(patientId) : '';
+
+    // Collect all requests from global store
+    const listFromStore = Array.from(accessRequestsStore.values()).filter(
+      (r: any) => !pIdStr || r.patientId === pIdStr
+    );
+
+    // Also check patient record
+    const patient = patientsStore.find(p => p.id === pIdStr);
+    const listFromPatient = (patient && Array.isArray(patient.accessRequests)) ? patient.accessRequests : [];
+
+    const map = new Map<string, any>();
+    listFromPatient.forEach((r: any) => { if (r && r.id) map.set(r.id, r); });
+    listFromStore.forEach((r: any) => {
+      if (r && r.id) {
+        const ex = map.get(r.id);
+        if (!ex || (ex.status === 'pending' && r.status !== 'pending')) {
+          map.set(r.id, r);
+        }
+      }
+    });
+
+    const requests = Array.from(map.values()).sort(
+      (a: any, b: any) => new Date(b.requestedAt || 0).getTime() - new Date(a.requestedAt || 0).getTime()
+    );
+
+    res.json({ success: true, requests });
   });
 
   // Batch sync patients database

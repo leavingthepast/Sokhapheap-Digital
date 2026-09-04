@@ -183,7 +183,40 @@ export async function updateQrAccessDecision(
   requestId: string,
   newStatus: 'allowed' | 'not_allowed'
 ): Promise<boolean> {
-  // 1. Broadcast locally
+  const nowIso = new Date().toISOString();
+
+  // 1. Immediately update local stored patient object so any tab reading localStorage sees it
+  try {
+    const raw = localStorage.getItem('sokhapheap_digital_patients_v2');
+    if (raw) {
+      const patients: any[] = JSON.parse(raw);
+      const matchPatient = patients.find((p: any) => p.id === patientId);
+      if (matchPatient) {
+        if (!Array.isArray(matchPatient.accessRequests)) {
+          matchPatient.accessRequests = [];
+        }
+        const target = matchPatient.accessRequests.find((r: any) => r.id === requestId);
+        if (target) {
+          target.status = newStatus;
+          target.respondedAt = nowIso;
+        } else {
+          matchPatient.accessRequests.unshift({
+            id: requestId,
+            patientId,
+            status: newStatus,
+            respondedAt: nowIso,
+            requestedAt: nowIso,
+            requesterName: 'Clinical Doctor',
+          });
+        }
+        localStorage.setItem('sokhapheap_digital_patients_v2', JSON.stringify(patients));
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // 2. Broadcast locally
   try {
     broadcastChannel?.postMessage({
       type: 'ACCESS_REQUEST_DECIDED',
@@ -202,7 +235,7 @@ export async function updateQrAccessDecision(
     // ignore
   }
 
-  // 2. Notify server
+  // 3. Notify server immediately
   try {
     await fetch('/api/qr-access/respond', {
       method: 'POST',
@@ -336,7 +369,7 @@ export function subscribeToAccessDecision(
   }
   window.addEventListener('storage', handleStorage);
 
-  // 4. Fast polling fallback (every 500ms) for high-speed responsiveness
+  // 4. Fast polling fallback (every 350ms) for high-speed zero-lag responsiveness
   const intervalId = setInterval(async () => {
     if (isClosed) return;
     try {
@@ -347,7 +380,7 @@ export function subscribeToAccessDecision(
     } catch {
       // ignore
     }
-  }, 500);
+  }, 350);
 
   return () => {
     isClosed = true;
@@ -446,7 +479,9 @@ export function subscribeToIncomingRequests(
     if (isClosed) return;
     try {
       const list = await fetchIncomingRequests(patientId);
-      if (list) onRequestsUpdate(list, false);
+      if (list && list.length > 0) {
+        onRequestsUpdate(list, false);
+      }
     } catch {
       // ignore
     }

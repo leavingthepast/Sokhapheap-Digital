@@ -1,4 +1,4 @@
-import { Patient, MedicalRecord, Allergy, Vaccination, IllnessHistoryItem, LabResultItem } from '../types';
+import { Patient, MedicalRecord, Allergy, Vaccination, IllnessHistoryItem, LabResultItem, QrAccessRequest } from '../types';
 import { CLOUD_DEPLOYED_URL } from './qrPayload';
 import { savePatientsToIDB, loadPatientsFromIDB } from './idbStorage';
 import { 
@@ -60,6 +60,20 @@ export function mergePatientRecords(localP?: Patient, remoteP?: Patient): Patien
   (remoteP.labResults || []).forEach(l => { if (l && l.id) labMap.set(l.id, l); });
   (localP.labResults || []).forEach(l => { if (l && l.id) labMap.set(l.id, l); });
 
+  // Union access requests by id preserving latest decisions (allowed / not_allowed overrides pending)
+  const accessRequestsMap = new Map<string, QrAccessRequest>();
+  (remoteP.accessRequests || []).forEach(r => { if (r && r.id) accessRequestsMap.set(r.id, r); });
+  (localP.accessRequests || []).forEach(r => {
+    if (r && r.id) {
+      const existing = accessRequestsMap.get(r.id);
+      if (existing && existing.status !== 'pending' && r.status === 'pending') {
+        // Keep existing allowed or not_allowed status
+      } else {
+        accessRequestsMap.set(r.id, r);
+      }
+    }
+  });
+
   return {
     ...remoteP,
     ...localP,
@@ -71,6 +85,7 @@ export function mergePatientRecords(localP?: Patient, remoteP?: Patient): Patien
     vaccinations: Array.from(vacMap.values()),
     illnessHistory: Array.from(illnessMap.values()),
     labResults: Array.from(labMap.values()),
+    accessRequests: Array.from(accessRequestsMap.values()),
     profilePicture: localP.profilePicture || remoteP.profilePicture,
     emergencyContact: localP.emergencyContact?.name ? localP.emergencyContact : (remoteP.emergencyContact || localP.emergencyContact),
     qrToken: localP.qrToken || remoteP.qrToken,

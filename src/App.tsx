@@ -484,10 +484,26 @@ function DashboardContent() {
       setPatients((prev) => {
         const idx = prev.findIndex((p) => p.id === currentPatient.id);
         if (idx >= 0) {
+          const currentList = prev[idx].accessRequests || [];
+          const map = new Map<string, any>();
+          currentList.forEach((r) => map.set(r.id, r));
+          freshRequests.forEach((r) => {
+            const existing = map.get(r.id);
+            // If local status is already 'allowed' or 'not_allowed', preserve it over stale 'pending'
+            if (existing && existing.status !== 'pending' && r.status === 'pending') {
+              map.set(r.id, existing);
+            } else {
+              map.set(r.id, r);
+            }
+          });
+          const mergedList = Array.from(map.values()).sort((a, b) =>
+            new Date(b.requestedAt || 0).getTime() - new Date(a.requestedAt || 0).getTime()
+          );
+
           const copy = [...prev];
           copy[idx] = {
             ...copy[idx],
-            accessRequests: freshRequests,
+            accessRequests: mergedList,
           };
           saveStoredPatients(copy);
           return copy;

@@ -27,9 +27,10 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const { t } = useLanguage();
   const initial = patient.name ? patient.name.charAt(0).toUpperCase() : 'P';
-  const pendingCount = (patient.accessRequests || []).filter(
-    (r) => r.status === 'pending'
-  ).length;
+  const allRequests = patient.accessRequests || [];
+  const pendingCount = allRequests.filter((r) => r.status === 'pending').length;
+  const allowedCount = allRequests.filter((r) => r.status === 'allowed').length;
+  const totalCount = allRequests.length;
 
   return (
     <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-xs border-b border-slate-100 shadow-2xs no-print">
@@ -107,11 +108,19 @@ export const Navbar: React.FC<NavbarProps> = ({
               >
                 <Bell className="w-4 h-4 text-teal-700" />
                 <span className="hidden xl:inline">{t.accessNotifications || 'Access'}</span>
-                {pendingCount > 0 && (
+                {pendingCount > 0 ? (
                   <span className="flex h-4 min-w-[16px] items-center justify-center px-1 rounded-full bg-rose-500 text-[10px] font-bold text-white animate-pulse">
                     {pendingCount}
                   </span>
-                )}
+                ) : allowedCount > 0 ? (
+                  <span className="flex h-4 min-w-[16px] items-center justify-center px-1 rounded-full bg-emerald-600 text-[10px] font-bold text-white shadow-2xs" title={`${allowedCount} allowed scan access permissions`}>
+                    {allowedCount}
+                  </span>
+                ) : totalCount > 0 ? (
+                  <span className="flex h-4 min-w-[16px] items-center justify-center px-1 rounded-full bg-slate-200 text-[10px] font-bold text-slate-700">
+                    {totalCount}
+                  </span>
+                ) : null}
               </button>
             )}
           </nav>
@@ -130,11 +139,19 @@ export const Navbar: React.FC<NavbarProps> = ({
                 title="View QR Scan Access Requests (Allowed / Not Allowed)"
               >
                 <Bell className="w-4 h-4 text-teal-700" />
-                {pendingCount > 0 && (
+                {pendingCount > 0 ? (
                   <span className="absolute -top-1 -right-1 flex h-4.5 min-w-[18px] items-center justify-center px-1 rounded-full bg-rose-500 text-white text-[10px] font-black shadow-xs animate-bounce">
                     {pendingCount}
                   </span>
-                )}
+                ) : allowedCount > 0 ? (
+                  <span className="absolute -top-1 -right-1 flex h-4.5 min-w-[18px] items-center justify-center px-1 rounded-full bg-emerald-600 text-white text-[10px] font-black shadow-xs" title={`${allowedCount} allowed access recorded`}>
+                    {allowedCount}
+                  </span>
+                ) : totalCount > 0 ? (
+                  <span className="absolute -top-1 -right-1 flex h-4.5 min-w-[18px] items-center justify-center px-1 rounded-full bg-slate-300 text-slate-800 text-[10px] font-bold shadow-xs">
+                    {totalCount}
+                  </span>
+                ) : null}
               </button>
             )}
 
@@ -211,6 +228,27 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             {t.qrCode}
           </button>
+          {onOpenNotifications && (
+            <button
+              onClick={onOpenNotifications}
+              className="flex-1 py-1.5 text-xs font-semibold text-center rounded-md text-slate-600 relative flex items-center justify-center gap-1"
+            >
+              <span>{t.accessNotifications || 'Access'}</span>
+              {pendingCount > 0 ? (
+                <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white text-[9px] font-black animate-pulse">
+                  {pendingCount}
+                </span>
+              ) : allowedCount > 0 ? (
+                <span className="px-1.5 py-0.2 rounded-full bg-emerald-600 text-white text-[9px] font-bold">
+                  {allowedCount}
+                </span>
+              ) : totalCount > 0 ? (
+                <span className="px-1.5 py-0.2 rounded-full bg-slate-200 text-slate-700 text-[9px] font-bold">
+                  {totalCount}
+                </span>
+              ) : null}
+            </button>
+          )}
         </div>
       </div>
     </header>
