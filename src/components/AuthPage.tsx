@@ -8,7 +8,8 @@ import {
   Loader2, 
   AlertCircle,
   Eye,
-  EyeOff
+  EyeOff,
+  MailCheck
 } from 'lucide-react';
 import { Patient } from '../types';
 import { useLanguage } from '../context/LanguageContext';
@@ -16,9 +17,10 @@ import { LanguageSwitcher } from './LanguageSwitcher';
 
 interface AuthPageProps {
   onLogin: (email: string, password?: string) => Promise<void>;
-  onCreateAccount: (name: string, email: string, password?: string) => Promise<void>;
+  onCreateAccount: (name: string, email: string, password?: string) => Promise<{ requiresEmailConfirmation: boolean; message: string }>;
   availablePatients: Patient[];
   authError?: string | null;
+  authNotice?: string | null;
   isLoading?: boolean;
 }
 
@@ -26,6 +28,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   onLogin,
   onCreateAccount,
   authError,
+  authNotice,
   isLoading = false,
 }) => {
   const { t } = useLanguage();
@@ -35,14 +38,17 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [localNotice, setLocalNotice] = useState<string | null>(null);
   const [localLoading, setLocalLoading] = useState(false);
 
   const displayError = authError || localError;
+  const displayNotice = authNotice || localNotice;
   const busy = isLoading || localLoading;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLocalError(null);
+    setLocalNotice(null);
 
     if (authMode === 'signup') {
       if (!name.trim() || !email.trim()) return;
@@ -52,7 +58,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({
       }
       try {
         setLocalLoading(true);
-        await onCreateAccount(name.trim(), email.trim(), password);
+        const res = await onCreateAccount(name.trim(), email.trim(), password);
+        if (res?.requiresEmailConfirmation) {
+          setLocalNotice(res.message || 'Check your email and confirm your account before logging in.');
+          setAuthMode('login');
+          setPassword('');
+        }
       } catch (err: any) {
         setLocalError(err.message || 'Failed to create account.');
       } finally {
@@ -134,6 +145,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                       setAuthMode('signup');
                       setName(email.split('@')[0] || '');
                       setLocalError(null);
+                      setLocalNotice(null);
                     }}
                     className="text-xs font-bold text-teal-800 underline hover:text-teal-900 cursor-pointer"
                   >
@@ -141,6 +153,18 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                   </button>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Confirmation / Info Notice Banner */}
+          {displayNotice && (
+            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl space-y-1.5 text-emerald-900 text-xs sm:text-sm shadow-xs animate-fadeIn">
+              <div className="flex items-start gap-2.5">
+                <MailCheck className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                <div className="flex-1 font-medium leading-relaxed">
+                  {displayNotice}
+                </div>
+              </div>
             </div>
           )}
 
@@ -157,13 +181,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({
               onClick={async () => {
                 try {
                   setLocalLoading(true);
-                  setEmail('testuser123@example.com');
+                  setEmail('demo.patient@gmail.com');
                   setPassword('Password123!');
-                  await onLogin('testuser123@example.com', 'Password123!');
+                  await onLogin('demo.patient@gmail.com', 'Password123!');
                 } catch {
-                  // If not yet created in local state, auto-create
+                  // If not yet created, auto-create
                   try {
-                    await onCreateAccount('Test Patient', 'testuser123@example.com', 'Password123!');
+                    await onCreateAccount('Demo Patient', 'demo.patient@gmail.com', 'Password123!');
                   } catch (e: any) {
                     setLocalError(e.message || 'Could not launch demo account.');
                   }

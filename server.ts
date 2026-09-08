@@ -32,7 +32,7 @@ const DATA_DIR = path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'patients.json');
 const DATA_REQUESTS_FILE = path.join(DATA_DIR, 'access_requests.json');
 
-// Sanitize patient object to ensure no dummy test data persists
+// Sanitize patient object to ensure no corrupted test data persists
 function sanitizePatient(p: any): any {
   if (!p || typeof p !== 'object') return p;
   const dummyNames = [
@@ -42,18 +42,17 @@ function sanitizePatient(p: any): any {
     'AIMmmmmmm',
     'Sokhapheap Digital'
   ];
-  const dummyAllergies = ['fish', 'egg', 'Egg', 'Peanut', 'Fish'];
 
   const cleanedRecords = Array.isArray(p.medicalRecords)
     ? p.medicalRecords.filter((r: any) => r && r.name && !dummyNames.includes(r.name))
     : [];
 
   const cleanedAllergies = Array.isArray(p.allergies)
-    ? p.allergies.filter((a: any) => a && a.name && !dummyAllergies.includes(a.name))
+    ? p.allergies.filter((a: any) => a && a.name)
     : [];
 
   const cleanedVaccinations = Array.isArray(p.vaccinations)
-    ? p.vaccinations.filter((v: any) => v && v.name && v.name !== 'COVID-19')
+    ? p.vaccinations.filter((v: any) => v && v.name)
     : [];
 
   return {
@@ -202,18 +201,52 @@ async function startServer() {
 
     const existingIndex = patientsStore.findIndex(p => p.id === updatedPatient.id);
     if (existingIndex >= 0) {
+      // Merge medical records so uploaded documents and high-res images are never lost
+      const existingRecords = patientsStore[existingIndex].medicalRecords || [];
+      const incomingRecords = Array.isArray(updatedPatient.medicalRecords) ? updatedPatient.medicalRecords : [];
+
+      const recordMap = new Map();
+      existingRecords.forEach((r: any) => { if (r && r.id) recordMap.set(r.id, r); });
+      incomingRecords.forEach((r: any) => {
+        if (r && r.id) {
+          const ex = recordMap.get(r.id);
+          if (ex && ex.imageUrl && !r.imageUrl) {
+            recordMap.set(r.id, { ...r, imageUrl: ex.imageUrl, previewContent: r.previewContent || ex.previewContent });
+          } else {
+            recordMap.set(r.id, r);
+          }
+        }
+      });
+
+      // Merge access requests so allowed notifications never disappear
+      const existingReqs = patientsStore[existingIndex].accessRequests || [];
+      const incomingReqs = updatedPatient.accessRequests || [];
+      const reqMap = new Map();
+      existingReqs.forEach((r: any) => { if (r && r.id) reqMap.set(r.id, r); });
+      incomingReqs.forEach((r: any) => {
+        if (r && r.id) {
+          const ex = reqMap.get(r.id);
+          if (ex && ex.status !== 'pending' && r.status === 'pending') {
+            reqMap.set(r.id, ex);
+          } else {
+            reqMap.set(r.id, r);
+          }
+        }
+      });
+
       patientsStore[existingIndex] = {
         ...patientsStore[existingIndex],
         ...updatedPatient,
-        medicalRecords: updatedPatient.medicalRecords || [],
-        accessRequests: updatedPatient.accessRequests || patientsStore[existingIndex].accessRequests || []
+        medicalRecords: Array.from(recordMap.values()),
+        accessRequests: Array.from(reqMap.values())
       };
     } else {
       patientsStore.unshift(updatedPatient);
     }
     saveDiskPatients(patientsStore);
 
-    res.json({ success: true, data: updatedPatient });
+    const savedPatient = existingIndex >= 0 ? patientsStore[existingIndex] : updatedPatient;
+    res.json({ success: true, data: savedPatient });
   });
 
   // =========================================================================
@@ -492,11 +525,44 @@ async function startServer() {
         const cleanP = sanitizePatient(newP);
         const idx = patientsStore.findIndex(p => p.id === cleanP.id);
         if (idx >= 0) {
-          // Merge record updates cleanly
+          // Merge record updates cleanly without dropping uploaded medical documents
+          const existingRecords = patientsStore[idx].medicalRecords || [];
+          const incomingRecords = Array.isArray(cleanP.medicalRecords) ? cleanP.medicalRecords : [];
+
+          const recordMap = new Map();
+          existingRecords.forEach((r: any) => { if (r && r.id) recordMap.set(r.id, r); });
+          incomingRecords.forEach((r: any) => {
+            if (r && r.id) {
+              const ex = recordMap.get(r.id);
+              if (ex && ex.imageUrl && !r.imageUrl) {
+                recordMap.set(r.id, { ...r, imageUrl: ex.imageUrl, previewContent: r.previewContent || ex.previewContent });
+              } else {
+                recordMap.set(r.id, r);
+              }
+            }
+          });
+
+          // Merge access requests so allowed / denied notifications never disappear
+          const existingReqs = patientsStore[idx].accessRequests || [];
+          const incomingReqs = cleanP.accessRequests || [];
+          const reqMap = new Map();
+          existingReqs.forEach((r: any) => { if (r && r.id) reqMap.set(r.id, r); });
+          incomingReqs.forEach((r: any) => {
+            if (r && r.id) {
+              const ex = reqMap.get(r.id);
+              if (ex && ex.status !== 'pending' && r.status === 'pending') {
+                reqMap.set(r.id, ex);
+              } else {
+                reqMap.set(r.id, r);
+              }
+            }
+          });
+
           patientsStore[idx] = {
             ...patientsStore[idx],
             ...cleanP,
-            medicalRecords: Array.isArray(cleanP.medicalRecords) ? cleanP.medicalRecords : [],
+            medicalRecords: Array.from(recordMap.values()),
+            accessRequests: Array.from(reqMap.values()),
           };
         } else {
           patientsStore.push(cleanP);

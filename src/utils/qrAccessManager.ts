@@ -408,6 +408,15 @@ export function subscribeToIncomingRequests(
   let isClosed = false;
   let eventSource: EventSource | null = null;
 
+  // Immediate initial fetch
+  if (patientId) {
+    fetchIncomingRequests(patientId).then((list) => {
+      if (list && list.length > 0 && !isClosed) {
+        onRequestsUpdate(list, false);
+      }
+    }).catch(() => {});
+  }
+
   // 1. Instant SSE Push Subscription
   if (typeof window !== 'undefined' && 'EventSource' in window && patientId) {
     try {

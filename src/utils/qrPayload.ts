@@ -53,18 +53,15 @@ export function getQRBaseUrl(customBase?: string): string {
   if (typeof window !== 'undefined') {
     const origin = window.location.origin;
     let pathname = window.location.pathname;
-    if (pathname && pathname !== '/') {
+    if (pathname && pathname !== '/' && !pathname.includes('/login') && !pathname.includes('/register')) {
       pathname = pathname.replace(/\/+$/, '');
     } else {
       pathname = '';
     }
 
-    // If running on localhost or 127.0.0.1, external phones won't reach localhost, so use public deployed URL
-    if (origin.includes('localhost') || origin.includes('127.0.0.1') || origin.includes('about:') || !origin.startsWith('http')) {
-      return CLOUD_DEPLOYED_URL;
+    if (origin && origin.startsWith('http')) {
+      return `${origin}${pathname}`;
     }
-
-    return `${origin}${pathname}`;
   }
 
   return CLOUD_DEPLOYED_URL;

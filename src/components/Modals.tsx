@@ -110,6 +110,7 @@ export const BloodTypeModal: React.FC<BloodTypeModalProps> = ({
 interface AllergyModalProps {
   isOpen: boolean;
   allergyToEdit?: Allergy | null;
+  initialData?: Allergy | null;
   onClose: () => void;
   onSave: (allergy: Allergy) => void;
 }
@@ -117,37 +118,42 @@ interface AllergyModalProps {
 export const AllergyModal: React.FC<AllergyModalProps> = ({
   isOpen,
   allergyToEdit,
+  initialData,
   onClose,
   onSave,
 }) => {
+  const activeAllergy = allergyToEdit || initialData || null;
   const { t } = useLanguage();
-  const [name, setName] = useState(allergyToEdit?.name || '');
-  const [reaction, setReaction] = useState(allergyToEdit?.reaction || '');
+  const [name, setName] = useState(activeAllergy?.name || '');
+  const [reaction, setReaction] = useState(activeAllergy?.reaction || '');
   const [severity, setSeverity] = useState<'Mild' | 'Moderate' | 'Severe'>(
-    allergyToEdit?.severity || 'Moderate'
+    activeAllergy?.severity || 'Moderate'
   );
 
   React.useEffect(() => {
-    if (allergyToEdit) {
-      setName(allergyToEdit.name);
-      setReaction(allergyToEdit.reaction);
-      setSeverity(allergyToEdit.severity || 'Moderate');
-    } else {
-      setName('');
-      setReaction('');
-      setSeverity('Moderate');
+    if (isOpen) {
+      if (activeAllergy) {
+        setName(activeAllergy.name || '');
+        setReaction(activeAllergy.reaction || '');
+        setSeverity(activeAllergy.severity || 'Moderate');
+      } else {
+        setName('');
+        setReaction('');
+        setSeverity('Moderate');
+      }
     }
-  }, [allergyToEdit, isOpen]);
+  }, [activeAllergy, isOpen]);
 
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    const cleanName = name.trim();
+    if (!cleanName) return;
 
     onSave({
-      id: allergyToEdit ? allergyToEdit.id : `alg-${Date.now()}`,
-      name: name.trim(),
+      id: activeAllergy?.id ? activeAllergy.id : `alg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name: cleanName,
       reaction: reaction.trim(),
       severity,
     });
@@ -241,6 +247,7 @@ export const AllergyModal: React.FC<AllergyModalProps> = ({
 interface VaccinationModalProps {
   isOpen: boolean;
   vaccineToEdit?: Vaccination | null;
+  initialData?: Vaccination | null;
   onClose: () => void;
   onSave: (vaccine: Vaccination) => void;
 }
@@ -248,38 +255,43 @@ interface VaccinationModalProps {
 export const VaccinationModal: React.FC<VaccinationModalProps> = ({
   isOpen,
   vaccineToEdit,
+  initialData,
   onClose,
   onSave,
 }) => {
+  const activeVaccine = vaccineToEdit || initialData || null;
   const { t } = useLanguage();
-  const [name, setName] = useState(vaccineToEdit?.name || '');
-  const [date, setDate] = useState(vaccineToEdit?.date || new Date().toISOString().split('T')[0]);
-  const [provider, setProvider] = useState(vaccineToEdit?.provider || '');
-  const [notes, setNotes] = useState(vaccineToEdit?.notes || '');
+  const [name, setName] = useState(activeVaccine?.name || '');
+  const [date, setDate] = useState(activeVaccine?.date || new Date().toISOString().split('T')[0]);
+  const [provider, setProvider] = useState(activeVaccine?.provider || '');
+  const [notes, setNotes] = useState(activeVaccine?.notes || '');
 
   React.useEffect(() => {
-    if (vaccineToEdit) {
-      setName(vaccineToEdit.name);
-      setDate(vaccineToEdit.date);
-      setProvider(vaccineToEdit.provider || '');
-      setNotes(vaccineToEdit.notes || '');
-    } else {
-      setName('');
-      setDate(new Date().toISOString().split('T')[0]);
-      setProvider('');
-      setNotes('');
+    if (isOpen) {
+      if (activeVaccine) {
+        setName(activeVaccine.name || '');
+        setDate(activeVaccine.date || new Date().toISOString().split('T')[0]);
+        setProvider(activeVaccine.provider || '');
+        setNotes(activeVaccine.notes || '');
+      } else {
+        setName('');
+        setDate(new Date().toISOString().split('T')[0]);
+        setProvider('');
+        setNotes('');
+      }
     }
-  }, [vaccineToEdit, isOpen]);
+  }, [activeVaccine, isOpen]);
 
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    const cleanName = name.trim();
+    if (!cleanName) return;
 
     onSave({
-      id: vaccineToEdit ? vaccineToEdit.id : `vac-${Date.now()}`,
-      name: name.trim(),
+      id: activeVaccine?.id ? activeVaccine.id : `vac-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name: cleanName,
       date,
       provider: provider.trim(),
       notes: notes.trim(),

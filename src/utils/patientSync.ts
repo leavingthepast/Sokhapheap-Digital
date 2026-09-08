@@ -39,10 +39,25 @@ export function mergePatientRecords(localP?: Patient, remoteP?: Patient): Patien
   if (!localP) return remoteP!;
   if (!remoteP) return localP;
 
-  // Union medical records by id preserving all documents
+  // Union medical records by id preserving all documents and images
   const recordsMap = new Map<string, MedicalRecord>();
-  (remoteP.medicalRecords || []).forEach(r => { if (r && r.id) recordsMap.set(r.id, r); });
-  (localP.medicalRecords || []).forEach(r => { if (r && r.id) recordsMap.set(r.id, r); });
+  const addOrMergeRecord = (r: MedicalRecord) => {
+    if (!r || !r.id) return;
+    const existing = recordsMap.get(r.id);
+    if (!existing) {
+      recordsMap.set(r.id, r);
+    } else {
+      recordsMap.set(r.id, {
+        ...existing,
+        ...r,
+        imageUrl: r.imageUrl || existing.imageUrl,
+        previewContent: r.previewContent || existing.previewContent,
+      });
+    }
+  };
+
+  (remoteP.medicalRecords || []).forEach(addOrMergeRecord);
+  (localP.medicalRecords || []).forEach(addOrMergeRecord);
 
   const allergiesMap = new Map<string, Allergy>();
   (remoteP.allergies || []).forEach(a => { if (a && a.id) allergiesMap.set(a.id, a); });
@@ -150,24 +165,17 @@ export async function compressImageForUpload(
 export async function fetchPatientFromServer(idOrToken: string): Promise<Patient | null> {
   if (!idOrToken) return null;
 
-  // 1. Try fetching directly from Cloud Firestore first
-  try {
-    const firestorePatient = await fetchPatientFromFirestore(idOrToken);
-    if (firestorePatient) {
-      return firestorePatient;
-    }
-  } catch (err) {
-    console.warn('[Firestore] Could not fetch from firestore directly:', err);
-  }
+  let result: Patient | null = null;
 
-  // 2. Fallback to REST API endpoints
+  // 1. Fetch from container REST API endpoints first (contains latest disk & uploaded files)
   try {
     const endpoints = [
-      `/api/patients/${encodeURIComponent(idOrToken)}`,
       `/api/patient?id=${encodeURIComponent(idOrToken)}`,
       `/api/patient?token=${encodeURIComponent(idOrToken)}`,
-      `${CLOUD_DEPLOYED_URL}/api/patients/${encodeURIComponent(idOrToken)}`,
-      `${CLOUD_DEPLOYED_URL}/api/patient?token=${encodeURIComponent(idOrToken)}`
+      `/api/patients/${encodeURIComponent(idOrToken)}`,
+      `${CLOUD_DEPLOYED_URL}/api/patient?id=${encodeURIComponent(idOrToken)}`,
+      `${CLOUD_DEPLOYED_URL}/api/patient?token=${encodeURIComponent(idOrToken)}`,
+      `${CLOUD_DEPLOYED_URL}/api/patients/${encodeURIComponent(idOrToken)}`
     ];
 
     for (const ep of endpoints) {
@@ -175,17 +183,31 @@ export async function fetchPatientFromServer(idOrToken: string): Promise<Patient
         const res = await fetch(ep, { headers: { Accept: 'application/json' } });
         if (res.ok) {
           const body = await res.json();
-          if (body && body.data) return body.data;
-          if (body && body.id) return body;
+          const p = body?.data || (body?.id ? body : null);
+          if (p && p.id) {
+            result = p;
+            break;
+          }
         }
       } catch {
         // try next endpoint
       }
     }
   } catch (e) {
-    console.warn('Could not fetch patient from server', e);
+    console.warn('Could not fetch patient from server REST', e);
   }
-  return null;
+
+  // 2. Also check Cloud Firestore to ensure any cloud data is merged
+  try {
+    const firestorePatient = await fetchPatientFromFirestore(idOrToken);
+    if (firestorePatient) {
+      result = result ? mergePatientRecords(result, firestorePatient) : firestorePatient;
+    }
+  } catch (err) {
+    console.warn('[Firestore] Could not fetch from firestore directly:', err);
+  }
+
+  return result;
 }
 
 /**

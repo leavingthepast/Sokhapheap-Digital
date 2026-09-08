@@ -4,7 +4,7 @@ import { Allergy } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 
 interface AllergiesCardProps {
-  allergies: Allergy[];
+  allergies?: Allergy[];
   onAdd?: () => void;
   onAddAllergy?: () => void;
   onEdit?: (allergy: Allergy) => void;
@@ -14,7 +14,7 @@ interface AllergiesCardProps {
 }
 
 export const AllergiesCard: React.FC<AllergiesCardProps> = ({
-  allergies,
+  allergies = [],
   onAdd,
   onAddAllergy,
   onEdit,
@@ -26,6 +26,7 @@ export const AllergiesCard: React.FC<AllergiesCardProps> = ({
   const handleAdd = onAdd || onAddAllergy;
   const handleEdit = onEdit || onEditAllergy;
   const handleDelete = onDelete || onDeleteAllergy;
+  const safeAllergies = Array.isArray(allergies) ? allergies : [];
 
   return (
     <div 
@@ -40,7 +41,7 @@ export const AllergiesCard: React.FC<AllergiesCardProps> = ({
           <div className="flex items-center gap-2">
             <h2 className="text-base font-bold text-slate-800 tracking-tight">{t.allergies}</h2>
             <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-200/60">
-              {allergies.length}
+              {safeAllergies.length}
             </span>
           </div>
         </div>
@@ -55,14 +56,14 @@ export const AllergiesCard: React.FC<AllergiesCardProps> = ({
       </div>
 
       <div className="mt-5 space-y-3 flex-1">
-        {allergies.length === 0 ? (
+        {safeAllergies.length === 0 ? (
           <div className="py-6 text-center text-slate-400 text-sm">
             {t.noAllergies}
           </div>
         ) : (
-          allergies.map((allergy) => (
+          safeAllergies.map((allergy) => (
             <div
-              key={allergy.id}
+              key={allergy.id || allergy.name}
               className="group flex items-start justify-between p-3 rounded-xl bg-slate-50/70 border border-slate-100 hover:bg-slate-50 transition-colors"
             >
               <div>

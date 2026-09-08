@@ -4,7 +4,7 @@ import { Vaccination } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 
 interface VaccinationsCardProps {
-  vaccinations: Vaccination[];
+  vaccinations?: Vaccination[];
   onAdd?: () => void;
   onAddVaccination?: () => void;
   onEdit?: (vaccine: Vaccination) => void;
@@ -14,7 +14,7 @@ interface VaccinationsCardProps {
 }
 
 export const VaccinationsCard: React.FC<VaccinationsCardProps> = ({
-  vaccinations,
+  vaccinations = [],
   onAdd,
   onAddVaccination,
   onEdit,
@@ -26,6 +26,7 @@ export const VaccinationsCard: React.FC<VaccinationsCardProps> = ({
   const handleAdd = onAdd || onAddVaccination;
   const handleEdit = onEdit || onEditVaccination;
   const handleDelete = onDelete || onDeleteVaccination;
+  const safeVaccinations = Array.isArray(vaccinations) ? vaccinations : [];
 
   return (
     <div 
@@ -40,7 +41,7 @@ export const VaccinationsCard: React.FC<VaccinationsCardProps> = ({
           <div className="flex items-center gap-2">
             <h2 className="text-base font-bold text-slate-800 tracking-tight">{t.vaccinations}</h2>
             <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-sky-100 text-sky-900 border border-sky-200/60">
-              {vaccinations.length}
+              {safeVaccinations.length}
             </span>
           </div>
         </div>
@@ -55,15 +56,15 @@ export const VaccinationsCard: React.FC<VaccinationsCardProps> = ({
       </div>
 
       <div className="mt-5 space-y-3 flex-1">
-        {vaccinations.length === 0 ? (
+        {safeVaccinations.length === 0 ? (
           <div className="py-6 text-center text-slate-400 text-sm">
             {t.noVaccinations}
           </div>
         ) : (
-          vaccinations.map((vac) => (
+          safeVaccinations.map((vac) => (
             <div
-              key={vac.id}
-              className="group flex items-start justify-between p-3.5 rounded-xl bg-slate-50/70 border border-slate-100 hover:bg-slate-50 transition-colors"
+              key={vac.id || vac.name}
+              className="group flex items-start justify-between p-3 rounded-xl bg-slate-50/70 border border-slate-100 hover:bg-slate-50 transition-colors"
             >
               <div className="space-y-1">
                 <div className="flex items-center gap-2">

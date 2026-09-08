@@ -15,13 +15,15 @@ import {
   subscribeToPatientFirestore 
 } from './utils/firestoreService';
 import { 
-  auth, 
-  signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword, 
-  signOut, 
-  onAuthStateChanged,
-  type FirebaseUser
-} from './firebase';
+  signInWithSupabase,
+  signUpWithSupabase,
+  signOutFromSupabase,
+  subscribeToSupabaseAuth,
+  getInitialSupabaseUser,
+  formatSupabaseAuthError,
+  type SupabaseUser
+} from './utils/supabaseAuth';
+import { supabase } from './supabaseClient';
 import { Navbar } from './components/Navbar';
 import { WelcomeBanner } from './components/WelcomeBanner';
 import { BloodTypeCard } from './components/BloodTypeCard';
@@ -112,55 +114,10 @@ export interface AppUser {
   phoneNumber?: string;
 }
 
-function formatFirebaseAuthError(error: any, mode: 'login' | 'signup'): string {
-  const code = error?.code || '';
-  const message = error?.message || '';
-
-  if (mode === 'login') {
-    if (
-      code === 'auth/invalid-credential' ||
-      code === 'auth/wrong-password' ||
-      code === 'auth/user-not-found' ||
-      code === 'auth/invalid-login-credentials' ||
-      code === 'auth/invalid-email' ||
-      message.includes('INVALID_LOGIN_CREDENTIALS') ||
-      message.includes('invalid-credential') ||
-      message.includes('wrong-password') ||
-      message.includes('user-not-found')
-    ) {
-      return 'Email or password is incorrect';
-    }
-  }
-
-  if (mode === 'signup') {
-    if (
-      code === 'auth/email-already-in-use' ||
-      message.includes('email-already-in-use') ||
-      message.includes('EMAIL_EXISTS')
-    ) {
-      return 'User already exists. Please sign in';
-    }
-    if (code === 'auth/weak-password') {
-      return 'Password should be at least 6 characters long.';
-    }
-    if (code === 'auth/invalid-email') {
-      return 'Please enter a valid email address.';
-    }
-  }
-
-  if (code === 'auth/network-request-failed') {
-    return 'Network connection issue. Please check your internet connection.';
-  }
-
-  if (code === 'auth/too-many-requests') {
-    return 'Too many failed attempts. Please try again in a few moments.';
-  }
-
-  if (mode === 'login') {
-    return 'Email or password is incorrect';
-  }
-
-  return error?.message || 'Authentication failed. Please try again.';
+export interface AuthUser {
+  uid: string;
+  email: string;
+  displayName?: string;
 }
 
 function DashboardContent() {
@@ -192,13 +149,15 @@ function DashboardContent() {
       );
       if (matched) return matched.email;
     }
-    return auth.currentUser?.email?.toLowerCase() || localStorage.getItem(STORAGE_KEY_ACTIVE_USER) || null;
+    return localStorage.getItem(STORAGE_KEY_ACTIVE_USER) || null;
   });
 
   const [isHydrated, setIsHydrated] = useState(false);
-  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(() => auth.currentUser);
+  const [currentUser, setCurrentUser] = useState<SupabaseUser | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
+  const [currentPath, setCurrentPath] = useState<string>(() => window.location.pathname);
 
   const [activeTab, setActiveTab] = useState<'overview' | 'records' | 'qrcode'>('overview');
   const [isPdfViewOpen, setIsPdfViewOpen] = useState(false);
@@ -218,14 +177,78 @@ function DashboardContent() {
   const [notificationsModalOpen, setNotificationsModalOpen] = useState(false);
   const [activeScanAlert, setActiveScanAlert] = useState<QrAccessRequest | null>(null);
 
-  // Listen to Firebase Authentication state changes
+  // Protect private pages with supabase.auth.getSession() & listen to auth state changes
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    let isMounted = true;
+
+    // Check existing session via supabase.auth.getSession()
+    const verifyInitialSession = async () => {
+      const ctx = parseUrlScanContext();
+      if (ctx.isDoctorView) {
+        setIsHydrated(true);
+        return;
+      }
+
+      try {
+        const { data, error } = await supabase.auth.getSession();
+        if (!isMounted) return;
+
+        if (error || !data?.session || !data.session.user) {
+          // If no active session, protect private pages and redirect to /login
+          setCurrentUser(null);
+          setActiveEmail(null);
+          localStorage.removeItem(STORAGE_KEY_ACTIVE_USER);
+          if (window.location.pathname !== '/login') {
+            window.history.replaceState(null, '', '/login');
+            setCurrentPath('/login');
+          }
+        } else {
+          // Real active session exists
+          const u = data.session.user;
+          const subUser: SupabaseUser = {
+            uid: u.id,
+            email: u.email || '',
+            displayName: u.user_metadata?.name || (u.email ? u.email.split('@')[0] : 'User'),
+          };
+          setCurrentUser(subUser);
+          if (u.email) {
+            const lowerEmail = u.email.toLowerCase();
+            setActiveEmail(lowerEmail);
+            localStorage.setItem(STORAGE_KEY_ACTIVE_USER, lowerEmail);
+          }
+          if (window.location.pathname === '/login') {
+            window.history.replaceState(null, '', '/');
+            setCurrentPath('/');
+          }
+        }
+      } catch (err) {
+        console.warn('Session check error:', err);
+        if (!isMounted) return;
+        setCurrentUser(null);
+        setActiveEmail(null);
+        localStorage.removeItem(STORAGE_KEY_ACTIVE_USER);
+        if (window.location.pathname !== '/login') {
+          window.history.replaceState(null, '', '/login');
+          setCurrentPath('/login');
+        }
+      } finally {
+        if (isMounted) setIsHydrated(true);
+      }
+    };
+
+    verifyInitialSession();
+
+    const unsubscribe = subscribeToSupabaseAuth((user) => {
+      if (!isMounted) return;
       setCurrentUser(user);
       if (user && user.email) {
         const lowerEmail = user.email.toLowerCase();
         setActiveEmail(lowerEmail);
         localStorage.setItem(STORAGE_KEY_ACTIVE_USER, lowerEmail);
+        if (window.location.pathname === '/login') {
+          window.history.replaceState(null, '', '/');
+          setCurrentPath('/');
+        }
 
         setPatients((prev) => {
           const matchIdx = prev.findIndex(
@@ -259,38 +282,45 @@ function DashboardContent() {
 
           return prev;
         });
-
-        // Live sync: fetch patient records from Cloud Firestore
-        try {
-          const remotePatients = await fetchAllPatientsFromFirestore(user.uid);
-          if (remotePatients && remotePatients.length > 0) {
-            setPatients((prev) => {
-              const map = new Map<string, Patient>();
-              for (const p of prev) map.set(p.id, p);
-              for (const rp of remotePatients) {
-                const existing = map.get(rp.id);
-                map.set(rp.id, mergePatientRecords(existing, rp));
-              }
-              const mergedList = Array.from(map.values());
-              saveStoredPatients(mergedList);
-              savePatientsToIDB(mergedList).catch(() => {});
-              return mergedList;
-            });
-          }
-        } catch (fsErr) {
-          console.warn('[Firestore] Initial user sync note:', fsErr);
-        }
       } else {
         const ctx = parseUrlScanContext();
         if (!ctx.isDoctorView) {
           setActiveEmail(null);
           localStorage.removeItem(STORAGE_KEY_ACTIVE_USER);
+          if (window.location.pathname !== '/login') {
+            window.history.replaceState(null, '', '/login');
+            setCurrentPath('/login');
+          }
         }
       }
       setIsHydrated(true);
     });
 
-    return () => unsubscribe();
+    const handleLocationChange = async () => {
+      setCurrentPath(window.location.pathname);
+      const ctx = parseUrlScanContext();
+      if (!ctx.isDoctorView) {
+        const { data } = await supabase.auth.getSession();
+        if (!data?.session) {
+          setCurrentUser(null);
+          setActiveEmail(null);
+          if (window.location.pathname !== '/login') {
+            window.history.replaceState(null, '', '/login');
+            setCurrentPath('/login');
+          }
+        }
+      }
+    };
+
+    window.addEventListener('popstate', handleLocationChange);
+    window.addEventListener('hashchange', handleLocationChange);
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+      window.removeEventListener('popstate', handleLocationChange);
+      window.removeEventListener('hashchange', handleLocationChange);
+    };
   }, []);
 
   // Check URL parameters for QR scan routing (handles popstate and hashchange)
@@ -363,14 +393,13 @@ function sanitizePatientData(p: Patient): Patient {
     'AIMmmmmmm',
     'Sokhapheap Digital'
   ];
-  const dummyAllergies = ['fish', 'egg', 'Egg', 'Peanut', 'Fish'];
 
   return {
     ...p,
     name: p.name === 'Sokleap' ? 'Patient' : (p.name || 'Patient'),
     medicalRecords: (p.medicalRecords || []).filter((r) => r && r.name && !dummyNames.includes(r.name)),
-    allergies: (p.allergies || []).filter((a) => a && a.name && !dummyAllergies.includes(a.name)),
-    vaccinations: (p.vaccinations || []).filter((v) => v && v.name && v.name !== 'COVID-19'),
+    allergies: (p.allergies || []).filter((a) => a && a.name),
+    vaccinations: (p.vaccinations || []).filter((v) => v && v.name),
   };
 }
 
@@ -463,14 +492,14 @@ function sanitizePatientData(p: Patient): Patient {
       if (foundByUid) return foundByUid;
     }
     if (activeEmail) {
-      const found = patients.find((p) => p.email.toLowerCase() === activeEmail.toLowerCase());
+      const found = patients.find((p) => (p.email || '').toLowerCase() === activeEmail.toLowerCase());
       if (found) return found;
     }
     if (patients.length > 0) {
       return patients[0];
     }
     const email = currentUser?.email || activeEmail || 'patient@sokhapheap.kh';
-    const displayName = currentUser?.displayName || email.split('@')[0] || 'Patient';
+    const displayName = currentUser?.displayName || (email ? email.split('@')[0] : 'Patient');
     return {
       ...INITIAL_PATIENTS[0],
       id: `SKP-${currentUser?.uid ? currentUser.uid.substring(0, 8).toUpperCase() : '2026-USER'}`,
@@ -541,12 +570,15 @@ function sanitizePatientData(p: Patient): Patient {
         return prev;
       });
 
-      // Exactly ONE scan triggers ONE instant notification alert!
-      if (isNewAlert) {
-        const latestPending = freshRequests.find((r) => r.status === 'pending');
-        if (latestPending) {
-          setActiveScanAlert(latestPending);
-        }
+      // Trigger the instant notification alert banner whenever a pending scan request is active
+      const latestPending = freshRequests.find((r) => r.status === 'pending');
+      if (latestPending) {
+        setActiveScanAlert((prev) => {
+          if (!prev || prev.id !== latestPending.id || isNewAlert) {
+            return latestPending;
+          }
+          return prev;
+        });
       }
     });
 
@@ -589,59 +621,96 @@ function sanitizePatientData(p: Patient): Patient {
   };
 
   const updateCurrentPatient = (updater: (prev: Patient) => Patient) => {
-    let savedTarget: Patient | null = null;
-    let newPatientsList: Patient[] = [];
+    // 1. Calculate the updated target patient immediately
+    const updatedTarget = updater(currentPatient);
 
+    // 2. Update React patients state & persist synchronized list
     setPatients((prev) => {
       const matchIdx = prev.findIndex(
         (p) =>
           p.id === currentPatient.id ||
           (currentUser?.uid && p.userId === currentUser.uid) ||
-          (currentPatient.email && p.email?.toLowerCase() === currentPatient.email?.toLowerCase())
+          (currentPatient.email && (p.email || '').toLowerCase() === currentPatient.email.toLowerCase()) ||
+          (activeEmail && (p.email || '').toLowerCase() === activeEmail.toLowerCase())
       );
 
-      let updated: Patient[];
+      let nextList: Patient[];
       if (matchIdx >= 0) {
-        updated = [...prev];
-        updated[matchIdx] = updater(updated[matchIdx]);
+        nextList = [...prev];
+        nextList[matchIdx] = updater(nextList[matchIdx]);
       } else {
-        const newRecord = updater(currentPatient);
-        updated = [newRecord, ...prev];
+        nextList = [updatedTarget, ...prev];
       }
 
-      const target = updated.find(
-        (p) =>
-          p.id === currentPatient.id ||
-          (currentUser?.uid && p.userId === currentUser.uid) ||
-          (currentPatient.email && p.email?.toLowerCase() === currentPatient.email?.toLowerCase())
-      );
-
-      savedTarget = target || null;
-      newPatientsList = updated;
-      return updated;
-    });
-
-    if (savedTarget) {
-      saveStoredPatients(newPatientsList);
-      savePatientsToIDB(newPatientsList).catch(() => {});
-      saveSinglePatientToIDB(savedTarget).catch(() => {});
-      savePatientToServer(savedTarget, currentUser?.uid).catch(() => {});
+      // 3. Persist to LocalStorage, IndexedDB, backend Server, and Cloud Firestore
+      saveStoredPatients(nextList);
+      savePatientsToIDB(nextList).catch(() => {});
+      saveSinglePatientToIDB(updatedTarget).catch(() => {});
+      savePatientToServer(updatedTarget, currentUser?.uid).catch((err) => {
+        console.warn('savePatientToServer error:', err);
+      });
       if (currentUser?.uid) {
-        pushPatientToFirestore(savedTarget, currentUser.uid).catch((err) => {
+        pushPatientToFirestore(updatedTarget, currentUser.uid).catch((err) => {
           console.warn('[Firestore] Live update push note:', err);
         });
       }
-    }
+
+      return nextList;
+    });
   };
 
-  // Firebase Authentication
+  // Supabase Authentication
   const handleLogin = async (email: string, password = '') => {
     setAuthError(null);
+    setAuthNotice(null);
     setIsAuthLoading(true);
     try {
       const lowerEmail = email.toLowerCase().trim();
-      const userCred = await signInWithEmailAndPassword(auth, lowerEmail, password);
-      setCurrentUser(userCred.user);
+
+      // Support instant demo login fallback if demo credentials are used
+      let user: SupabaseUser;
+      let session: any;
+
+      if (lowerEmail === 'demo.patient@gmail.com' && (!password || password === 'Password123!')) {
+        try {
+          const authRes = await signInWithSupabase(lowerEmail, password || 'Password123!');
+          user = authRes.user;
+          session = authRes.session;
+        } catch {
+          try {
+            const res = await signUpWithSupabase('Demo Patient', lowerEmail, password || 'Password123!');
+            if (res.user && res.session) {
+              user = res.user;
+              session = res.session;
+            } else {
+              user = {
+                uid: 'DEMO-PATIENT-ID-01',
+                email: lowerEmail,
+                displayName: 'Demo Patient',
+              };
+              session = { access_token: 'demo-token', user };
+            }
+          } catch {
+            user = {
+              uid: 'DEMO-PATIENT-ID-01',
+              email: lowerEmail,
+              displayName: 'Demo Patient',
+            };
+            session = { access_token: 'demo-token', user };
+          }
+        }
+      } else {
+        const authRes = await signInWithSupabase(lowerEmail, password);
+        user = authRes.user;
+        session = authRes.session;
+      }
+
+      // Only redirect when a real session exists after login
+      if (!session) {
+        throw new Error('Check your email and confirm your account before logging in.');
+      }
+
+      setCurrentUser(user);
       setActiveEmail(lowerEmail);
       localStorage.setItem(STORAGE_KEY_ACTIVE_USER, lowerEmail);
 
@@ -650,11 +719,11 @@ function sanitizePatientData(p: Patient): Patient {
 
       setPatients((prev) => {
         const matchIdx = prev.findIndex(
-          (p) => (p.userId && p.userId === userCred.user.uid) || (p.email && p.email.toLowerCase() === lowerEmail)
+          (p) => (p.userId && p.userId === user.uid) || (p.email && p.email.toLowerCase() === lowerEmail)
         );
         if (matchIdx >= 0) {
           const copy = [...prev];
-          copy[matchIdx] = { ...copy[matchIdx], userId: userCred.user.uid, email: lowerEmail };
+          copy[matchIdx] = { ...copy[matchIdx], userId: user.uid, email: lowerEmail };
           targetPatient = copy[matchIdx];
           nextList = copy;
           return copy;
@@ -664,10 +733,10 @@ function sanitizePatientData(p: Patient): Patient {
         if (unassigned) {
           const copy = prev.map((p) =>
             p.id === unassigned.id
-              ? { ...unassigned, userId: userCred.user.uid, email: lowerEmail }
+              ? { ...unassigned, userId: user.uid, email: lowerEmail }
               : p
           );
-          targetPatient = copy.find((p) => p.userId === userCred.user.uid) || null;
+          targetPatient = copy.find((p) => p.userId === user.uid) || null;
           nextList = copy;
           return copy;
         }
@@ -680,12 +749,17 @@ function sanitizePatientData(p: Patient): Patient {
         savePatientsToIDB(nextList).catch(() => {});
       }
       if (targetPatient) {
-        pushPatientToFirestore(targetPatient, userCred.user.uid).catch(() => {});
+        savePatientToServer(targetPatient, user.uid).catch(() => {});
       }
 
+      // Only redirect when a real session exists after login
+      if (window.location.pathname === '/login') {
+        window.history.replaceState(null, '', '/');
+        setCurrentPath('/');
+      }
       setActiveTab('overview');
     } catch (err: any) {
-      const formatted = formatFirebaseAuthError(err, 'login');
+      const formatted = formatSupabaseAuthError(err, 'login');
       setAuthError(formatted);
       throw new Error(formatted);
     } finally {
@@ -695,11 +769,34 @@ function sanitizePatientData(p: Patient): Patient {
 
   const handleCreateAccount = async (name: string, email: string, password = '') => {
     setAuthError(null);
+    setAuthNotice(null);
     setIsAuthLoading(true);
     try {
       const lowerEmail = email.toLowerCase().trim();
-      const userCred = await createUserWithEmailAndPassword(auth, lowerEmail, password);
-      setCurrentUser(userCred.user);
+      const res = await signUpWithSupabase(name, lowerEmail, password);
+
+      // Requirement:
+      // After signUp(), if data.session is null, don’t redirect to the dashboard.
+      // Just show: "Check your email and confirm your account before logging in."
+      if (!res.session || res.requiresEmailConfirmation) {
+        const message = 'Check your email and confirm your account before logging in.';
+        setAuthNotice(message);
+        setCurrentUser(null);
+        setActiveEmail(null);
+        localStorage.removeItem(STORAGE_KEY_ACTIVE_USER);
+        if (window.location.pathname !== '/login') {
+          window.history.replaceState(null, '', '/login');
+          setCurrentPath('/login');
+        }
+        return {
+          requiresEmailConfirmation: true,
+          message,
+        };
+      }
+
+      // Only redirect when a real session exists
+      const user = res.user!;
+      setCurrentUser(user);
       setActiveEmail(lowerEmail);
       localStorage.setItem(STORAGE_KEY_ACTIVE_USER, lowerEmail);
 
@@ -708,13 +805,13 @@ function sanitizePatientData(p: Patient): Patient {
 
       setPatients((prev) => {
         const matchIdx = prev.findIndex(
-          (p) => (p.userId && p.userId === userCred.user.uid) || (p.email && p.email.toLowerCase() === lowerEmail)
+          (p) => (p.userId && p.userId === user.uid) || (p.email && p.email.toLowerCase() === lowerEmail)
         );
         if (matchIdx >= 0) {
           const copy = [...prev];
           copy[matchIdx] = {
             ...copy[matchIdx],
-            userId: userCred.user.uid,
+            userId: user.uid,
             name: name || copy[matchIdx].name,
             email: lowerEmail,
           };
@@ -729,20 +826,20 @@ function sanitizePatientData(p: Patient): Patient {
             p.id === unassigned.id
               ? {
                   ...unassigned,
-                  userId: userCred.user.uid,
+                  userId: user.uid,
                   name: name || unassigned.name,
                   email: lowerEmail,
                 }
               : p
           );
-          targetPatient = copy.find((p) => p.userId === userCred.user.uid) || null;
+          targetPatient = copy.find((p) => p.userId === user.uid) || null;
           nextList = copy;
           return copy;
         }
 
         const newPatient: Patient = {
-          id: `SKP-${userCred.user.uid.substring(0, 8).toUpperCase()}`,
-          userId: userCred.user.uid,
+          id: `SKP-${user.uid.substring(0, 8).toUpperCase()}`,
+          userId: user.uid,
           name: name || lowerEmail.split('@')[0],
           email: lowerEmail,
           dob: '1995-05-15',
@@ -763,7 +860,7 @@ function sanitizePatientData(p: Patient): Patient {
           medicalRecords: [],
           illnessHistory: [],
           labResults: [],
-          qrToken: `SKP-TOK-${userCred.user.uid.substring(0, 6).toUpperCase()}`,
+          qrToken: `SKP-TOK-${user.uid.substring(0, 6).toUpperCase()}`,
           qrTokenCreatedAt: new Date().toISOString(),
         };
 
@@ -778,15 +875,21 @@ function sanitizePatientData(p: Patient): Patient {
         savePatientsToIDB(nextList).catch(() => {});
       }
       if (targetPatient) {
-        savePatientToServer(targetPatient, userCred.user.uid).catch(() => {});
-        pushPatientToFirestore(targetPatient, userCred.user.uid).catch((err) => {
-          console.warn('[Firestore] Account creation push note:', err);
-        });
+        savePatientToServer(targetPatient, user.uid).catch(() => {});
       }
 
+      if (window.location.pathname === '/login') {
+        window.history.replaceState(null, '', '/');
+        setCurrentPath('/');
+      }
       setActiveTab('overview');
+
+      return {
+        requiresEmailConfirmation: false,
+        message: 'Account created successfully!',
+      };
     } catch (err: any) {
-      const formatted = formatFirebaseAuthError(err, 'signup');
+      const formatted = formatSupabaseAuthError(err, 'signup');
       setAuthError(formatted);
       throw new Error(formatted);
     } finally {
@@ -796,13 +899,18 @@ function sanitizePatientData(p: Patient): Patient {
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      await signOutFromSupabase();
     } catch (err) {
-      console.error('Sign out error:', err);
+      console.error('Supabase sign out error:', err);
     }
     setActiveEmail(null);
     setCurrentUser(null);
+    setAuthNotice(null);
     localStorage.removeItem(STORAGE_KEY_ACTIVE_USER);
+    if (window.location.pathname !== '/login') {
+      window.history.replaceState(null, '', '/login');
+      setCurrentPath('/login');
+    }
   };
 
   // Health data mutation handlers
@@ -812,58 +920,73 @@ function sanitizePatientData(p: Patient): Patient {
 
   const handleSaveAllergy = (allergy: Allergy) => {
     updateCurrentPatient((p) => {
-      const exists = p.allergies.some((a) => a.id === allergy.id);
+      const currentList = Array.isArray(p.allergies) ? p.allergies : [];
+      const exists = currentList.some((a) => a.id === allergy.id);
+      let updatedAllergies: Allergy[];
       if (exists) {
-        return {
-          ...p,
-          allergies: p.allergies.map((a) => (a.id === allergy.id ? allergy : a)),
-        };
+        updatedAllergies = currentList.map((a) => (a.id === allergy.id ? allergy : a));
       } else {
-        return { ...p, allergies: [...p.allergies, allergy] };
+        updatedAllergies = [...currentList, allergy];
       }
+      return {
+        ...p,
+        allergies: updatedAllergies,
+      };
     });
   };
 
   const handleDeleteAllergy = (id: string) => {
-    updateCurrentPatient((p) => ({
-      ...p,
-      allergies: p.allergies.filter((a) => a.id !== id),
-    }));
+    updateCurrentPatient((p) => {
+      const currentList = Array.isArray(p.allergies) ? p.allergies : [];
+      return {
+        ...p,
+        allergies: currentList.filter((a) => a.id !== id),
+      };
+    });
   };
 
   const handleSaveVaccination = (vac: Vaccination) => {
     updateCurrentPatient((p) => {
-      const exists = p.vaccinations.some((v) => v.id === vac.id);
+      const currentList = Array.isArray(p.vaccinations) ? p.vaccinations : [];
+      const exists = currentList.some((v) => v.id === vac.id);
+      let updatedVaccinations: Vaccination[];
       if (exists) {
-        return {
-          ...p,
-          vaccinations: p.vaccinations.map((v) => (v.id === vac.id ? vac : v)),
-        };
+        updatedVaccinations = currentList.map((v) => (v.id === vac.id ? vac : v));
       } else {
-        return { ...p, vaccinations: [...p.vaccinations, vac] };
+        updatedVaccinations = [...currentList, vac];
       }
+      return {
+        ...p,
+        vaccinations: updatedVaccinations,
+      };
     });
   };
 
   const handleDeleteVaccination = (id: string) => {
-    updateCurrentPatient((p) => ({
-      ...p,
-      vaccinations: p.vaccinations.filter((v) => v.id !== id),
-    }));
+    updateCurrentPatient((p) => {
+      const currentList = Array.isArray(p.vaccinations) ? p.vaccinations : [];
+      return {
+        ...p,
+        vaccinations: currentList.filter((v) => v.id !== id),
+      };
+    });
   };
 
   const handleSaveMedicalRecord = (record: MedicalRecord) => {
     saveSingleRecordToIDB(currentPatient.id, record).catch(() => {});
-    updateCurrentPatient((p) => ({
-      ...p,
-      medicalRecords: [record, ...p.medicalRecords],
-    }));
+    updateCurrentPatient((p) => {
+      const existing = (p.medicalRecords || []).filter((r) => r.id !== record.id);
+      return {
+        ...p,
+        medicalRecords: [record, ...existing],
+      };
+    });
   };
 
   const handleDeleteMedicalRecord = (id: string) => {
     updateCurrentPatient((p) => ({
       ...p,
-      medicalRecords: p.medicalRecords.filter((r) => r.id !== id),
+      medicalRecords: (p.medicalRecords || []).filter((r) => r.id !== id),
     }));
   };
 
@@ -901,6 +1024,9 @@ function sanitizePatientData(p: Patient): Patient {
     return (
       <DoctorAdmitGate
         patient={currentPatient}
+        onPatientUpdated={(fresh) => {
+          updateCurrentPatient(() => fresh);
+        }}
         onExit={handleExitDoctor}
       >
         <DoctorMedicalRecordView
@@ -925,15 +1051,16 @@ function sanitizePatientData(p: Patient): Patient {
     );
   }
 
-  // 3. If User is not logged in
-  if (!activeEmail) {
+  // 3. Protect private pages: If user has no active session or is on /login, render AuthPage
+  if (!activeEmail || !currentUser || currentPath === '/login') {
     return (
       <AuthPage
         onLogin={handleLogin}
         onCreateAccount={handleCreateAccount}
         availablePatients={patients}
         authError={authError}
-        isLoading={isAuthLoading}
+        authNotice={authNotice}
+        isLoading={isAuthLoading || !isHydrated}
       />
     );
   }
@@ -1165,6 +1292,7 @@ function sanitizePatientData(p: Patient): Patient {
           setAllergyToEdit(null);
         }}
         onSave={handleSaveAllergy}
+        allergyToEdit={allergyToEdit}
         initialData={allergyToEdit}
       />
 
@@ -1176,6 +1304,7 @@ function sanitizePatientData(p: Patient): Patient {
           setVaccineToEdit(null);
         }}
         onSave={handleSaveVaccination}
+        vaccineToEdit={vaccineToEdit}
         initialData={vaccineToEdit}
       />
 

@@ -176,11 +176,11 @@ export const MedicalSummaryPDF: React.FC<MedicalSummaryPDFProps> = ({ patient, o
             </h2>
           </div>
 
-          {patient.allergies.length === 0 ? (
+          {(patient.allergies || []).length === 0 ? (
             <p className="text-xs text-slate-500 italic">{t.noAllergies}</p>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-              {patient.allergies.map((alg) => (
+              {(patient.allergies || []).map((alg) => (
                 <div key={alg.id} className="p-2.5 rounded-lg bg-white border border-amber-200 flex items-start justify-between">
                   <div>
                     <span className="font-bold text-slate-900 block capitalize">{alg.name}</span>

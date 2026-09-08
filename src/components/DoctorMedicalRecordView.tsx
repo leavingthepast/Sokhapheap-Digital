@@ -62,12 +62,13 @@ export const DoctorMedicalRecordView: React.FC<DoctorViewProps> = ({ patient, on
 
   // Filtered illness list based on search and status
   const filteredIllnesses = useMemo(() => {
+    const q = (searchQuery || '').toLowerCase();
     return (patient.illnessHistory || []).filter((ill) => {
       const matchSearch = 
-        !searchQuery ||
-        ill.condition.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        ill.doctorOrHospital.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        ill.notes.toLowerCase().includes(searchQuery.toLowerCase());
+        !q ||
+        (ill.condition || '').toLowerCase().includes(q) ||
+        (ill.doctorOrHospital || '').toLowerCase().includes(q) ||
+        (ill.notes || '').toLowerCase().includes(q);
       
       const matchFilter = illnessFilter === 'All' || ill.status === illnessFilter;
       return matchSearch && matchFilter;
@@ -76,28 +77,28 @@ export const DoctorMedicalRecordView: React.FC<DoctorViewProps> = ({ patient, on
 
   // Filtered documents based on search
   const filteredRecords = useMemo(() => {
+    if (!searchQuery) return patient.medicalRecords || [];
+    const q = searchQuery.toLowerCase();
     return (patient.medicalRecords || []).filter((rec) => {
-      if (!searchQuery) return true;
-      const q = searchQuery.toLowerCase();
       return (
-        rec.name.toLowerCase().includes(q) ||
-        rec.type.toLowerCase().includes(q) ||
-        rec.description.toLowerCase().includes(q) ||
-        rec.doctorOrClinic.toLowerCase().includes(q)
+        (rec.name || '').toLowerCase().includes(q) ||
+        (rec.type || '').toLowerCase().includes(q) ||
+        (rec.description || '').toLowerCase().includes(q) ||
+        (rec.doctorOrClinic || '').toLowerCase().includes(q)
       );
     });
   }, [patient.medicalRecords, searchQuery]);
 
   // Filtered lab results based on search
   const filteredLabs = useMemo(() => {
+    if (!searchQuery) return patient.labResults || [];
+    const q = searchQuery.toLowerCase();
     return (patient.labResults || []).filter((lab) => {
-      if (!searchQuery) return true;
-      const q = searchQuery.toLowerCase();
       return (
-        lab.testName.toLowerCase().includes(q) ||
-        lab.result.toLowerCase().includes(q) ||
-        lab.labOrHospital.toLowerCase().includes(q) ||
-        lab.referenceRange.toLowerCase().includes(q)
+        (lab.testName || '').toLowerCase().includes(q) ||
+        (lab.result || '').toLowerCase().includes(q) ||
+        (lab.labOrHospital || '').toLowerCase().includes(q) ||
+        (lab.referenceRange || '').toLowerCase().includes(q)
       );
     });
   }, [patient.labResults, searchQuery]);
@@ -234,11 +235,11 @@ export const DoctorMedicalRecordView: React.FC<DoctorViewProps> = ({ patient, on
               <div className="p-4 rounded-2xl bg-amber-50 border-2 border-amber-200 min-w-[200px] max-w-[280px] shadow-2xs">
                 <div className="flex items-center gap-1 text-[11px] font-extrabold text-amber-800 uppercase tracking-wider mb-1.5">
                   <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>{t.allergies} ({patient.allergies.length})</span>
+                  <span>{t.allergies} ({(patient.allergies || []).length})</span>
                 </div>
                 <div className="space-y-1">
-                  {patient.allergies.length > 0 ? (
-                    patient.allergies.map((a) => (
+                  {(patient.allergies || []).length > 0 ? (
+                    (patient.allergies || []).map((a) => (
                       <div key={a.id} className="flex items-center justify-between text-xs">
                         <span className="font-bold text-amber-950 capitalize truncate max-w-[130px]">{a.name}</span>
                         <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
@@ -283,7 +284,7 @@ export const DoctorMedicalRecordView: React.FC<DoctorViewProps> = ({ patient, on
                 }`}
               >
                 <FileCheck className="w-3.5 h-3.5" />
-                <span>{t.illnessHistorySummary} ({patient.illnessHistory.length})</span>
+                <span>{t.illnessHistorySummary} ({(patient.illnessHistory || []).length})</span>
               </button>
 
               <button
@@ -295,7 +296,7 @@ export const DoctorMedicalRecordView: React.FC<DoctorViewProps> = ({ patient, on
                 }`}
               >
                 <FileText className="w-3.5 h-3.5" />
-                <span>{t.uploadedDocuments} ({patient.medicalRecords.length})</span>
+                <span>{t.uploadedDocuments} ({(patient.medicalRecords || []).length})</span>
               </button>
 
               <button
@@ -307,7 +308,7 @@ export const DoctorMedicalRecordView: React.FC<DoctorViewProps> = ({ patient, on
                 }`}
               >
                 <Activity className="w-3.5 h-3.5" />
-                <span>{t.labBloodPanels} ({patient.labResults.length})</span>
+                <span>{t.labBloodPanels} ({(patient.labResults || []).length})</span>
               </button>
 
               <button
@@ -319,7 +320,7 @@ export const DoctorMedicalRecordView: React.FC<DoctorViewProps> = ({ patient, on
                 }`}
               >
                 <Syringe className="w-3.5 h-3.5" />
-                <span>{t.vaccinations} ({patient.vaccinations.length})</span>
+                <span>{t.vaccinations} ({(patient.vaccinations || []).length})</span>
               </button>
             </div>
 
@@ -611,13 +612,13 @@ export const DoctorMedicalRecordView: React.FC<DoctorViewProps> = ({ patient, on
                 <span>{t.knownAllergiesAndReactions}</span>
               </div>
 
-              {patient.allergies.length === 0 ? (
+              {(patient.allergies || []).length === 0 ? (
                 <div className="py-6 text-center text-xs text-slate-400 italic">
                   {t.noAllergies || 'No known allergies reported.'}
                 </div>
               ) : (
                 <div className="space-y-2.5">
-                  {patient.allergies.map((alg) => (
+                  {(patient.allergies || []).map((alg) => (
                     <div key={alg.id} className="p-3 rounded-xl bg-amber-50/50 border border-amber-200 flex items-start justify-between">
                       <div>
                         <span className="font-bold text-amber-950 text-xs sm:text-sm block capitalize">{alg.name}</span>

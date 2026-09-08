@@ -2,11 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { Patient, QrAccessStatus } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { DoctorMedicalRecordView } from './DoctorMedicalRecordView';
+import { fetchPatientFromServer, mergePatientRecords } from '../utils/patientSync';
 import {
   submitQrAccessRequest,
   checkQrAccessStatus,
   subscribeToAccessDecision,
   getSavedRequestIdForPatient,
+  updateQrAccessDecision,
 } from '../utils/qrAccessManager';
 import {
   Shield,
@@ -26,6 +28,7 @@ import {
 interface DoctorAdmitGateProps {
   patient: Patient;
   onAdmitted?: () => void;
+  onPatientUpdated?: (patient: Patient) => void;
   onExit: () => void;
   children?: React.ReactNode;
 }
@@ -33,6 +36,7 @@ interface DoctorAdmitGateProps {
 export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
   patient,
   onAdmitted,
+  onPatientUpdated,
   onExit,
   children,
 }) => {
@@ -72,11 +76,37 @@ export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
           if (serverStatus === 'allowed') {
             setRequestStatus('allowed');
             onAdmitted?.();
+            return;
           } else if (serverStatus === 'pending') {
             setRequestStatus('pending');
+            return;
           } else if (serverStatus === 'not_allowed') {
             setRequestStatus('not_allowed');
+            return;
           }
+        }
+      }
+
+      // If no active prior request, automatically submit access request upon scanning
+      // This immediately triggers the alert notification on the patient's phone/dashboard
+      if (isMounted) {
+        try {
+          setIsSubmitting(true);
+          const created = await submitQrAccessRequest({
+            patientId: patient.id,
+            qrToken: patient.qrToken,
+            requesterName: requesterName.trim() || 'Dr. Sothea / Emergency Physician',
+            requesterRole: requesterRole.trim() || 'Attending Clinical Doctor',
+            requesterLocation: requesterLocation.trim() || 'Emergency Department',
+          });
+          if (isMounted) {
+            setActiveRequestId(created.id);
+            setRequestStatus('pending');
+          }
+        } catch (err) {
+          console.warn('[DoctorAdmitGate] Auto-submit access request note:', err);
+        } finally {
+          if (isMounted) setIsSubmitting(false);
         }
       }
     };
@@ -95,13 +125,11 @@ export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
 
     const loadFreshPatient = async () => {
       try {
-        const query = patient.id ? `id=${encodeURIComponent(patient.id)}` : `token=${encodeURIComponent(patient.qrToken || '')}`;
-        const res = await fetch(`/api/patient?${query}`);
-        if (res.ok) {
-          const json = await res.json();
-          if (isMounted && json.success && json.data) {
-            setFreshPatientData(json.data);
-          }
+        const idOrToken = patient.id || patient.qrToken || '';
+        const fresh = await fetchPatientFromServer(idOrToken);
+        if (isMounted && fresh) {
+          setFreshPatientData(fresh);
+          onPatientUpdated?.(fresh);
         }
       } catch {
         // fallback to prop patient
@@ -112,7 +140,7 @@ export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [requestStatus, patient.id, patient.qrToken]);
+  }, [requestStatus, patient.id, patient.qrToken, onPatientUpdated]);
 
   // Subscribe to real-time decisions via SSE, BroadcastChannel, and fast polling
   useEffect(() => {
@@ -197,12 +225,18 @@ export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
 
   // Immediate full doctor portal reveal once allowed! No waiting, no loading delay.
   if (requestStatus === 'allowed') {
-    const displayPatient = freshPatientData || patient;
-    return (
-      <>
-        {children || <DoctorMedicalRecordView patient={displayPatient} onExit={onExit} />}
-      </>
-    );
+    const displayPatient = freshPatientData ? mergePatientRecords(patient, freshPatientData) : patient;
+    if (React.isValidElement(children)) {
+      return (
+        <>
+          {React.cloneElement(children as React.ReactElement<any>, {
+            patient: displayPatient,
+            onExit,
+          })}
+        </>
+      );
+    }
+    return <DoctorMedicalRecordView patient={displayPatient} onExit={onExit} />;
   }
 
   return (
@@ -320,6 +354,21 @@ export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
               >
                 <RefreshCw className={`w-4 h-4 ${isChecking ? 'animate-spin' : ''}`} />
                 <span>{isChecking ? 'Checking...' : t.checkStatus}</span>
+              </button>
+              <button
+                type="button"
+                id="btn-simulate-patient-allow"
+                onClick={async () => {
+                  if (!activeRequestId) return;
+                  await updateQrAccessDecision(patient.id, activeRequestId, 'allowed');
+                  setRequestStatus('allowed');
+                  onAdmitted?.();
+                }}
+                className="w-full sm:w-auto px-4 py-3 rounded-xl bg-emerald-800/80 hover:bg-emerald-700 text-emerald-100 font-semibold text-xs transition-colors cursor-pointer border border-emerald-600/50 flex items-center justify-center gap-1.5"
+                title="Test button: Simulates the patient tapping Allow from their phone/dashboard"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Simulate Patient Allow (Test)</span>
               </button>
               <button
                 type="button"
