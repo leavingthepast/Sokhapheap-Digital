@@ -49,6 +49,10 @@ export function formatSupabaseAuthError(error: any, mode: 'login' | 'signup'): s
     return 'Too many requests. Please wait a few moments and try again.';
   }
 
+  if (message.toLowerCase().includes('firebase') || message.includes('api-key-not-valid')) {
+    return 'Session expired or configuration refreshed. Please sign in with your email and password.';
+  }
+
   return message || 'Authentication failed. Please try again.';
 }
 

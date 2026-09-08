@@ -125,7 +125,7 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
                       ? 'bg-emerald-500/30 border-emerald-300 text-emerald-100' 
                       : 'bg-white/15 hover:bg-white/25 border-white/20 text-white'
                   }`}
-                  title="Click to sync latest data with Cloud Firestore"
+                  title="Click to synchronize latest data with cloud and local storage"
                 >
                   {isSyncing ? (
                     <RefreshCw className="w-3.5 h-3.5 text-teal-200 animate-spin" />
@@ -138,8 +138,8 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
                     {isSyncing 
                       ? (t.syncingFirestore || 'Syncing...') 
                       : syncSuccess 
-                      ? (t.firestoreSyncSuccess || 'Firestore Synced!') 
-                      : (t.firestoreSynced || 'Firestore Synced')}
+                      ? (t.firestoreSyncSuccess || 'Data Synced!') 
+                      : (t.firestoreSynced || 'Data Synced')}
                   </span>
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
                 </div>
@@ -152,9 +152,9 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
                     setIsModalOpen(true);
                   }}
                   className="p-1 rounded-full bg-white/10 hover:bg-white/20 text-teal-100 hover:text-white transition-colors cursor-pointer text-xs"
-                  title="View Cloud Firestore Status & Security Rules"
+                  title="View Cloud & Storage Connection Status"
                 >
-                  <span className="sr-only">Firestore Settings</span>
+                  <span className="sr-only">Storage Status</span>
                   <Cloud className="w-3.5 h-3.5" />
                 </button>
               </div>

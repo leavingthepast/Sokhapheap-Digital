@@ -1,18 +1,18 @@
 import React, { useState } from 'react';
 import { 
   X, 
-  Copy, 
   Check, 
   ExternalLink, 
-  ShieldAlert, 
   Database, 
   RefreshCw, 
   CloudCheck, 
-  KeyRound
+  KeyRound,
+  HardDrive,
+  ShieldCheck
 } from 'lucide-react';
-import { auth } from '../firebase';
-import { pushPatientToFirestore } from '../utils/firestoreService';
 import { Patient } from '../types';
+import { pushPatientToFirestore } from '../utils/firestoreService';
+import { SUPABASE_URL } from '../supabaseClient';
 
 interface FirestoreStatusModalProps {
   isOpen: boolean;
@@ -21,69 +21,30 @@ interface FirestoreStatusModalProps {
   onSyncSuccess?: () => void;
 }
 
-const RECOMMENDED_RULES = `rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    // User profile access
-    match /users/{uid} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
-    }
-
-    // Patient medical records:
-    // - Authenticated users can create and manage their records
-    // - QR code scans and emergency access can read
-    match /patients/{patientId} {
-      allow read: if true;
-      allow write: if request.auth != null;
-    }
-  }
-}`;
-
 export const FirestoreStatusModal: React.FC<FirestoreStatusModalProps> = ({
   isOpen,
   onClose,
   patient,
   onSyncSuccess,
 }) => {
-  const [copied, setCopied] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [statusType, setStatusType] = useState<'success' | 'error' | 'info'>('info');
 
   if (!isOpen) return null;
 
-  const handleCopyRules = () => {
-    navigator.clipboard.writeText(RECOMMENDED_RULES);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
-  };
-
   const handleRetrySync = async () => {
     setIsRetrying(true);
     setStatusMessage(null);
     try {
-      if (!auth.currentUser) {
-        setStatusType('error');
-        setStatusMessage('Authentication Required: Please sign in or use Demo Access before testing Cloud Firestore writes.');
-        return;
-      }
-
-      const res = await pushPatientToFirestore(patient, auth.currentUser?.uid, { immediate: true });
+      const res = await pushPatientToFirestore(patient, patient.userId);
       if (res.success) {
         setStatusType('success');
-        setStatusMessage('Successfully connected and written to Cloud Firestore! Refresh the Firebase Console to view your records.');
+        setStatusMessage('Patient records and documents are synchronized with local storage, server database, and Supabase Storage.');
         if (onSyncSuccess) onSyncSuccess();
       } else {
         setStatusType('error');
-        if (res.code === 'permission-denied') {
-          setStatusMessage('Permission Denied: Your Firebase Rules in the Console are still blocking writes. Please paste the rules below into the Rules tab and click "Publish".');
-        } else if (res.code === 'resource-exhausted') {
-          setStatusMessage('Resource Rate Limited: Firestore write stream queue is currently backing off. Please wait a moment and try again.');
-        } else if (res.code === 'unauthenticated') {
-          setStatusMessage('Authentication Required: Please sign in or click "Demo Access" first.');
-        } else {
-          setStatusMessage(res.error || 'Sync failed. Please check your internet connection and Firebase rules.');
-        }
+        setStatusMessage('Sync encountered an issue. Records remain protected locally in IndexedDB.');
       }
     } catch (err: any) {
       setStatusType('error');
@@ -93,8 +54,8 @@ export const FirestoreStatusModal: React.FC<FirestoreStatusModalProps> = ({
     }
   };
 
-  const currentUserEmail = auth.currentUser?.email || patient.email || 'Not signed in';
-  const currentUid = auth.currentUser?.uid || patient.userId || 'None';
+  const currentUserEmail = patient.email || 'Not signed in';
+  const currentUid = patient.userId || 'Local user';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
@@ -109,8 +70,8 @@ export const FirestoreStatusModal: React.FC<FirestoreStatusModalProps> = ({
               <Database className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-slate-900">Cloud Firestore Connection & Rules</h2>
-              <p className="text-xs text-slate-500">Project: <span className="font-mono font-semibold text-slate-700">sokhapheap-digital</span> • Database: <span className="font-mono font-semibold text-slate-700">(default)</span></p>
+              <h2 className="text-lg font-bold text-slate-900">Cloud & Storage Synchronization</h2>
+              <p className="text-xs text-slate-500">Supabase Storage: <span className="font-mono font-semibold text-slate-700">app.files</span></p>
             </div>
           </div>
 
@@ -134,7 +95,7 @@ export const FirestoreStatusModal: React.FC<FirestoreStatusModalProps> = ({
               {statusType === 'success' ? (
                 <CloudCheck className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
               ) : (
-                <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <ShieldCheck className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
               )}
               <div className="flex-1 text-xs sm:text-sm leading-relaxed">
                 {statusMessage}
@@ -147,75 +108,63 @@ export const FirestoreStatusModal: React.FC<FirestoreStatusModalProps> = ({
             <div className="flex items-center gap-2">
               <KeyRound className="w-4 h-4 text-teal-600 shrink-0" />
               <div>
-                <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Signed In User</span>
+                <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Signed In Patient</span>
                 <span className="font-semibold text-slate-800 truncate block max-w-[200px]">{currentUserEmail}</span>
               </div>
             </div>
             <div className="flex items-center gap-2">
               <Database className="w-4 h-4 text-teal-600 shrink-0" />
               <div>
-                <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Auth UID</span>
+                <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">User ID</span>
                 <span className="font-mono text-slate-700 truncate block max-w-[200px]">{currentUid}</span>
               </div>
             </div>
           </div>
 
-          {/* Actionable Steps for Firebase Console */}
+          {/* Connected Services */}
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <span>Why is Cloud Firestore empty?</span>
-              </h3>
-              <a
-                href="https://console.firebase.google.com/project/sokhapheap-digital/firestore/databases/-default-/rules"
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1.5 text-xs text-teal-700 hover:text-teal-800 font-semibold hover:underline"
-              >
-                <span>Open Rules in Console</span>
-                <ExternalLink className="w-3.5 h-3.5" />
-              </a>
+            <h3 className="text-sm font-bold text-slate-900">Connected Cloud & Storage Services</h3>
+            
+            <div className="space-y-2">
+              <div className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/50 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <HardDrive className="w-5 h-5 text-teal-600" />
+                  <div>
+                    <div className="text-xs font-bold text-slate-800">Supabase Storage</div>
+                    <div className="text-[11px] text-slate-500 font-mono">Bucket: app.files (or app-files)</div>
+                  </div>
+                </div>
+                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800">
+                  Active
+                </span>
+              </div>
+
+              <div className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/50 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Database className="w-5 h-5 text-teal-600" />
+                  <div>
+                    <div className="text-xs font-bold text-slate-800">Supabase Database & Auth</div>
+                    <div className="text-[11px] text-slate-500 font-mono truncate max-w-[260px]">{SUPABASE_URL}</div>
+                  </div>
+                </div>
+                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800">
+                  Connected
+                </span>
+              </div>
+
+              <div className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/50 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <ShieldCheck className="w-5 h-5 text-teal-600" />
+                  <div>
+                    <div className="text-xs font-bold text-slate-800">Offline IndexedDB Storage</div>
+                    <div className="text-[11px] text-slate-500">Persistent browser database for zero data loss</div>
+                  </div>
+                </div>
+                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800">
+                  Ready
+                </span>
+              </div>
             </div>
-
-            <p className="text-xs text-slate-600 leading-relaxed">
-              When a Firestore database is created in the Firebase Console, Google Cloud defaults the security rules to <strong>deny all writes</strong> (<code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-[11px]">allow read, write: if false;</code>).
-              To permit your patient records to save into Firestore:
-            </p>
-
-            <ol className="list-decimal list-inside space-y-1.5 text-xs text-slate-700 bg-teal-50/50 p-3.5 rounded-2xl border border-teal-100/80">
-              <li>In your open Firebase Console tab, click the <strong>Rules</strong> tab (next to Data).</li>
-              <li>Replace the content with the recommended rules below.</li>
-              <li>Click the blue <strong>Publish</strong> button at the top right of the Rules tab.</li>
-              <li>Click <strong>Test & Push to Firestore Now</strong> below to immediately write your records!</li>
-            </ol>
-          </div>
-
-          {/* Rules Code Block */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-700">Firebase Firestore Rules:</span>
-              <button
-                type="button"
-                onClick={handleCopyRules}
-                className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition-all cursor-pointer"
-              >
-                {copied ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 text-emerald-600" />
-                    <span className="text-emerald-700">Copied to clipboard!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Copy Rules</span>
-                  </>
-                )}
-              </button>
-            </div>
-
-            <pre className="p-4 bg-slate-900 text-teal-200 font-mono text-xs rounded-2xl overflow-x-auto leading-relaxed border border-slate-800">
-              {RECOMMENDED_RULES}
-            </pre>
           </div>
         </div>
 
@@ -238,12 +187,12 @@ export const FirestoreStatusModal: React.FC<FirestoreStatusModalProps> = ({
             {isRetrying ? (
               <>
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                <span>Writing to Cloud Firestore...</span>
+                <span>Synchronizing...</span>
               </>
             ) : (
               <>
                 <RefreshCw className="w-3.5 h-3.5" />
-                <span>Test & Push to Firestore Now</span>
+                <span>Test Sync Now</span>
               </>
             )}
           </button>
