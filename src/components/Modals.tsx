@@ -854,9 +854,17 @@ export const AddMedicalRecordModal: React.FC<AddRecordModalProps> = ({
             </button>
             <button
               type="submit"
-              className="px-5 py-2.5 text-xs font-bold text-white bg-teal-700 hover:bg-teal-800 rounded-xl shadow-xs cursor-pointer"
+              disabled={isUploadingStorage || isProcessing}
+              className="inline-flex items-center gap-1.5 px-5 py-2.5 text-xs font-bold text-white bg-teal-700 hover:bg-teal-800 disabled:opacity-60 disabled:cursor-not-allowed rounded-xl shadow-xs cursor-pointer transition-all"
             >
-              {t.saveRecord}
+              {isUploadingStorage ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Uploading to Storage...</span>
+                </>
+              ) : (
+                <span>{t.saveRecord}</span>
+              )}
             </button>
           </div>
         </form>
