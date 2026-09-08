@@ -20,13 +20,16 @@ import {
   Phone,
   Trash2,
   Sparkles,
-  Eye
+  Eye,
+  Loader2,
+  CheckCircle2
 } from 'lucide-react';
 import { BloodType, Allergy, Vaccination, MedicalRecord, RecordType, Patient } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { DOCUMENT_IMAGES } from '../data/documentImages';
 import { triggerPrintDocument } from '../utils/printHelper';
 import { compressImageForUpload } from '../utils/patientSync';
+import { uploadToSupabaseStorage } from '../utils/supabaseStorage';
 import { PdfViewer } from './PdfViewer';
 
 // ==========================================
@@ -409,12 +412,18 @@ export const AddMedicalRecordModal: React.FC<AddRecordModalProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const [showFullPdfPreview, setShowFullPdfPreview] = useState(false);
 
+  const [isUploadingStorage, setIsUploadingStorage] = useState(false);
+  const [storageBucketUsed, setStorageBucketUsed] = useState<string | null>(null);
+  const [storageError, setStorageError] = useState<string | null>(null);
+
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const cameraInputRef = React.useRef<HTMLInputElement>(null);
 
   const processFile = React.useCallback((file: File) => {
     if (!file) return;
     setIsProcessing(true);
+    setIsUploadingStorage(true);
+    setStorageError(null);
 
     const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
     const detectedType: 'pdf' | 'image' | 'document' = isPdf ? 'pdf' : 'image';
@@ -446,20 +455,38 @@ export const AddMedicalRecordModal: React.FC<AddRecordModalProps> = ({
       setType('Medical Report');
     }
 
+    // 1. Upload file directly to Supabase Storage bucket ('app.files')
+    uploadToSupabaseStorage(file, file.name)
+      .then((res) => {
+        if (res.success && res.url) {
+          setUploadedFileUrl(res.url);
+          setStorageBucketUsed(res.bucket || 'app.files');
+        } else if (res.error) {
+          setStorageError(res.error);
+        }
+        setIsUploadingStorage(false);
+      })
+      .catch((err) => {
+        console.warn('Storage upload warning:', err);
+        setStorageError(err?.message || 'Storage upload failed');
+        setIsUploadingStorage(false);
+      });
+
+    // 2. Read local file for instant preview thumbnail while storage upload completes
     const reader = new FileReader();
     reader.onload = async (event) => {
       const result = event.target?.result as string;
       if (result) {
         if (isPdf) {
-          setUploadedFileUrl(result);
+          setUploadedFileUrl((curr) => curr && curr.startsWith('http') ? curr : result);
           setIsProcessing(false);
         } else {
           try {
-            // Compress high-res images to optimize storage and cross-device sync while maintaining sharp text
+            // Compress high-res images to optimize preview
             const compressed = await compressImageForUpload(result, 1600, 0.85);
-            setUploadedFileUrl(compressed);
+            setUploadedFileUrl((curr) => curr && curr.startsWith('http') ? curr : compressed);
           } catch {
-            setUploadedFileUrl(result);
+            setUploadedFileUrl((curr) => curr && curr.startsWith('http') ? curr : result);
           } finally {
             setIsProcessing(false);
           }
@@ -678,6 +705,26 @@ export const AddMedicalRecordModal: React.FC<AddRecordModalProps> = ({
                   >
                     Remove
                   </button>
+                </div>
+
+                {/* Supabase Storage Sync Indicator */}
+                <div className="flex items-center justify-center pt-1">
+                  {isUploadingStorage ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-teal-50 text-teal-800 border border-teal-200 text-[11px] font-semibold animate-pulse">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-teal-600" />
+                      <span>Uploading to Supabase Storage...</span>
+                    </span>
+                  ) : storageBucketUsed ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-200 text-[11px] font-bold">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>Uploaded to Supabase Storage ({storageBucketUsed})</span>
+                    </span>
+                  ) : storageError ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 text-[10.5px] font-medium" title={storageError}>
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <span>Ready locally (Storage upload note: {storageError})</span>
+                    </span>
+                  ) : null}
                 </div>
               </div>
             ) : (
@@ -1264,22 +1311,44 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [photoStorageSuccess, setPhotoStorageSuccess] = useState(false);
+
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    setIsUploadingPhoto(true);
+    setPhotoStorageSuccess(false);
+
+    try {
+      // 1. Upload to Supabase Storage bucket ('app.files')
+      const uploadRes = await uploadToSupabaseStorage(file, `avatar-${file.name}`);
+      if (uploadRes.success && uploadRes.url) {
+        setProfilePicture(uploadRes.url);
+        setPhotoStorageSuccess(true);
+        setIsUploadingPhoto(false);
+        return;
+      }
+    } catch (err) {
+      console.warn('Avatar upload fallback to local preview:', err);
+    }
+
+    // 2. Local preview fallback if offline or storage issue
     const reader = new FileReader();
     reader.onload = (event) => {
       const res = event.target?.result as string;
       if (res) {
         setProfilePicture(res);
       }
+      setIsUploadingPhoto(false);
     };
     reader.readAsDataURL(file);
   };
 
   const handleRemovePhoto = () => {
     setProfilePicture('');
+    setPhotoStorageSuccess(false);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -1352,17 +1421,22 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
               <div className="space-y-1.5 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold rounded-xl shadow-2xs transition-all">
-                    <Camera className="w-3.5 h-3.5" />
-                    <span>{t.uploadPhoto || 'Upload Photo'}</span>
+                    {isUploadingPhoto ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-teal-200" />
+                    ) : (
+                      <Camera className="w-3.5 h-3.5" />
+                    )}
+                    <span>{isUploadingPhoto ? 'Uploading...' : (t.uploadPhoto || 'Upload Photo')}</span>
                     <input
                       type="file"
                       accept="image/*"
                       onChange={handlePhotoUpload}
+                      disabled={isUploadingPhoto}
                       className="hidden"
                     />
                   </label>
 
-                  {profilePicture && (
+                  {profilePicture && !isUploadingPhoto && (
                     <button
                       type="button"
                       onClick={handleRemovePhoto}
@@ -1373,6 +1447,12 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
                     </button>
                   )}
                 </div>
+                {photoStorageSuccess && (
+                  <p className="text-[11px] font-bold text-emerald-700 flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Saved to Supabase Storage (app.files)</span>
+                  </p>
+                )}
                 <p className="text-[11px] text-slate-400">
                   JPG, PNG or WebP image. Stored securely with your profile.
                 </p>
