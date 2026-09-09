@@ -3,7 +3,7 @@ import { ShieldCheck, FileText, QrCode, UserPen, Phone, Cloud, CloudCheck, Refre
 import { Patient } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 
-import { FirestoreStatusModal } from './FirestoreStatusModal';
+import { SupabaseSyncModal } from './SupabaseSyncModal';
 
 interface WelcomeBannerProps {
   patient: Patient;
@@ -12,7 +12,7 @@ interface WelcomeBannerProps {
   onEditProfile: () => void;
   onOpenNotifications?: () => void;
   onSyncData?: () => Promise<boolean | { success: boolean; error?: string; code?: string }>;
-  onPushToFirestore?: () => Promise<boolean | { success: boolean; error?: string; code?: string }>;
+  onPushToCloud?: () => Promise<boolean | { success: boolean; error?: string; code?: string }>;
 }
 
 export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
@@ -22,7 +22,7 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
   onEditProfile,
   onOpenNotifications,
   onSyncData,
-  onPushToFirestore,
+  onPushToCloud,
 }) => {
   const { t } = useLanguage();
   const [isSyncing, setIsSyncing] = useState(false);
@@ -34,7 +34,7 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
     (r) => r.status === 'pending'
   ).length;
 
-  const syncHandler = onSyncData || onPushToFirestore;
+  const syncHandler = onSyncData || onPushToCloud;
 
   const handleManualSync = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -114,11 +114,11 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
               </button>
             </div>
 
-            {/* Secondary Patient Metadata (Phone, ID, Firestore Sync Status) */}
+            {/* Secondary Patient Metadata (Phone, ID, Cloud Sync Status) */}
             <div className="flex flex-wrap items-center gap-2 sm:gap-3 pt-1.5">
               <div className="flex items-center gap-1.5">
                 <div 
-                  id="welcome-banner-firestore-sync-pill"
+                  id="welcome-banner-cloud-sync-pill"
                   onClick={handleManualSync}
                   className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border backdrop-blur-xs cursor-pointer transition-all ${
                     syncSuccess 
@@ -136,17 +136,17 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
                   )}
                   <span>
                     {isSyncing 
-                      ? (t.syncingFirestore || 'Syncing...') 
+                      ? (t.syncingData || 'Syncing...') 
                       : syncSuccess 
-                      ? (t.firestoreSyncSuccess || 'Data Synced!') 
-                      : (t.firestoreSynced || 'Data Synced')}
+                      ? (t.syncSuccess || 'Data Synced!') 
+                      : (t.dataSynced || 'Data Synced')}
                   </span>
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
                 </div>
 
                 <button
                   type="button"
-                  id="open-firestore-status-btn"
+                  id="open-storage-status-btn"
                   onClick={(e) => {
                     e.stopPropagation();
                     setIsModalOpen(true);
@@ -212,8 +212,8 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
         </div>
       </div>
 
-      {/* Cloud Firestore Diagnostic & Rules Modal */}
-      <FirestoreStatusModal
+      {/* Cloud & Supabase Storage Status Modal */}
+      <SupabaseSyncModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         patient={patient}

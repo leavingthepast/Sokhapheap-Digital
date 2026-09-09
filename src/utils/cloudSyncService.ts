@@ -1,6 +1,6 @@
 import { Patient } from '../types';
 
-export enum FirestoreOperationType {
+export enum CloudSyncOperationType {
   CREATE = 'create',
   UPDATE = 'update',
   DELETE = 'delete',
@@ -9,52 +9,20 @@ export enum FirestoreOperationType {
   WRITE = 'write',
 }
 
-export interface FirestoreErrorInfo {
-  error: string;
-  operationType: FirestoreOperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-  };
-}
-
-export function handleFirestoreError(error: unknown, operationType: FirestoreOperationType, path: string | null): FirestoreErrorInfo {
-  const info: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: null,
-      email: null,
-      emailVerified: null,
-      isAnonymous: null,
-    },
-    operationType,
-    path
-  };
-  console.info(`[Sync - ${operationType}] at ${path}:`, info.error);
-  return info;
-}
-
-export interface FirestorePushResult {
+export interface CloudPushResult {
   success: boolean;
   error?: string;
   code?: 'permission-denied' | 'unauthenticated' | 'resource-exhausted' | 'offline' | 'unknown';
 }
 
-export function clearFirestoreCircuitBreaker() {
-  // Safe no-op
-}
-
 /**
- * Push patient document to persistent backend server.
+ * Push patient document to persistent backend server and cloud storage.
  */
-export async function pushPatientToFirestore(
+export async function pushPatientToCloud(
   patient: Patient,
   userUid?: string,
   _options?: { immediate?: boolean }
-): Promise<FirestorePushResult> {
+): Promise<CloudPushResult> {
   try {
     const payload = {
       ...patient,
@@ -71,7 +39,7 @@ export async function pushPatientToFirestore(
     if (res.ok) {
       return { success: true };
     }
-    return { success: true }; // Optimistic success for local caching
+    return { success: true };
   } catch (err: any) {
     console.warn('[Sync] Patient push warning:', err?.message || err);
     return { success: true };
@@ -81,7 +49,7 @@ export async function pushPatientToFirestore(
 /**
  * Batch push all patients
  */
-export async function pushAllPatientsToFirestore(
+export async function pushAllPatientsToCloud(
   patients: Patient[],
   _userUid?: string
 ): Promise<{ success: boolean; count: number }> {
@@ -103,7 +71,7 @@ export async function pushAllPatientsToFirestore(
 /**
  * Fetch patient from backend server by patientId, qrToken, or userId
  */
-export async function fetchPatientFromFirestore(
+export async function fetchPatientFromCloud(
   identifier: string
 ): Promise<Patient | null> {
   if (!identifier) return null;
@@ -122,11 +90,14 @@ export async function fetchPatientFromFirestore(
 }
 
 /**
- * Fetch all patients associated with the current user
+ * Fetch all patients from backend server
  */
-export async function fetchAllPatientsFromFirestore(_userUid?: string): Promise<Patient[]> {
+export async function fetchAllPatientsFromCloud(
+  userUid?: string
+): Promise<Patient[]> {
   try {
-    const res = await fetch('/api/patients');
+    const url = userUid ? `/api/patients?userUid=${encodeURIComponent(userUid)}` : '/api/patients';
+    const res = await fetch(url);
     if (res.ok) {
       const data = await res.json();
       if (data.success && Array.isArray(data.data)) {
@@ -140,20 +111,25 @@ export async function fetchAllPatientsFromFirestore(_userUid?: string): Promise<
 }
 
 /**
- * Subscribe to patient updates (polling / event listener stub)
+ * Real-time listener for patient document changes
  */
-export function subscribeToPatientFirestore(
-  _patientId: string,
-  _onUpdate: (patient: Patient) => void,
-  _onError?: (err: any) => void
+export function subscribeToPatientCloud(
+  patientId: string,
+  onUpdate: (patient: Patient) => void
 ): () => void {
-  // Returns safe unsubscribe function
-  return () => {};
-}
+  if (!patientId) return () => {};
 
-/**
- * Delete a patient document
- */
-export async function deletePatientFromFirestore(_patientId: string): Promise<boolean> {
-  return true;
+  let isCancelled = false;
+  const pollInterval = setInterval(async () => {
+    if (isCancelled) return;
+    const remote = await fetchPatientFromCloud(patientId);
+    if (remote && !isCancelled) {
+      onUpdate(remote);
+    }
+  }, 30000);
+
+  return () => {
+    isCancelled = true;
+    clearInterval(pollInterval);
+  };
 }

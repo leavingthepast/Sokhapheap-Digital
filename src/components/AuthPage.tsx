@@ -37,16 +37,25 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [clearedError, setClearedError] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [localNotice, setLocalNotice] = useState<string | null>(null);
   const [localLoading, setLocalLoading] = useState(false);
 
-  const displayError = authError || localError;
+  const displayError = clearedError ? localError : (authError || localError);
   const displayNotice = authNotice || localNotice;
   const busy = isLoading || localLoading;
 
+  const handleModeSwitch = (mode: 'login' | 'signup') => {
+    setAuthMode(mode);
+    setClearedError(true);
+    setLocalError(null);
+    setLocalNotice(null);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setClearedError(false);
     setLocalError(null);
     setLocalNotice(null);
 
@@ -142,14 +151,25 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      setAuthMode('signup');
+                      handleModeSwitch('signup');
                       setName(email.split('@')[0] || '');
-                      setLocalError(null);
-                      setLocalNotice(null);
                     }}
                     className="text-xs font-bold text-teal-800 underline hover:text-teal-900 cursor-pointer"
                   >
                     Register with {email || 'this email'} →
+                  </button>
+                </div>
+              )}
+
+              {authMode === 'signup' && displayError.toLowerCase().includes('already exists') && (
+                <div className="pt-1 border-t border-rose-200/60 flex items-center justify-between">
+                  <span className="text-[11px] text-rose-700">Account already exists</span>
+                  <button
+                    type="button"
+                    onClick={() => handleModeSwitch('login')}
+                    className="text-xs font-bold text-teal-800 underline hover:text-teal-900 cursor-pointer"
+                  >
+                    Switch to Log in →
                   </button>
                 </div>
               )}
@@ -230,7 +250,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                   required
                   placeholder="patient@example.com"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (clearedError === false) setClearedError(true);
+                    if (localError) setLocalError(null);
+                  }}
                   className="w-full pl-10 pr-4 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600 outline-hidden transition-all"
                 />
               </div>
@@ -249,7 +273,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                   minLength={6}
                   placeholder="••••••••"
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (clearedError === false) setClearedError(true);
+                    if (localError) setLocalError(null);
+                  }}
                   className="w-full pl-10 pr-10 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600 outline-hidden transition-all"
                 />
                 <button
@@ -299,10 +327,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                 {t.alreadyHaveAccount}{' '}
                 <button
                   type="button"
-                  onClick={() => {
-                    setAuthMode('login');
-                    setLocalError(null);
-                  }}
+                  onClick={() => handleModeSwitch('login')}
                   className="font-bold text-teal-700 hover:underline cursor-pointer"
                 >
                   {t.logInLink}
@@ -314,9 +339,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    setAuthMode('signup');
+                    handleModeSwitch('signup');
                     setName('');
-                    setLocalError(null);
                   }}
                   className="font-bold text-teal-700 hover:underline cursor-pointer"
                 >

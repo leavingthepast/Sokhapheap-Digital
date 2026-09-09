@@ -389,6 +389,7 @@ interface AddRecordModalProps {
   onClose: () => void;
   onSave: (record: MedicalRecord) => void;
   initialFile?: File | null;
+  userId?: string;
 }
 
 export const AddMedicalRecordModal: React.FC<AddRecordModalProps> = ({
@@ -396,6 +397,7 @@ export const AddMedicalRecordModal: React.FC<AddRecordModalProps> = ({
   onClose,
   onSave,
   initialFile,
+  userId,
 }) => {
   const { t } = useLanguage();
   const [name, setName] = useState('');
@@ -456,7 +458,7 @@ export const AddMedicalRecordModal: React.FC<AddRecordModalProps> = ({
     }
 
     // 1. Upload file directly to Supabase Storage bucket ('app.files')
-    uploadToSupabaseStorage(file, file.name)
+    uploadToSupabaseStorage(file, file.name, userId)
       .then((res) => {
         if (res.success && res.url) {
           setUploadedFileUrl(res.url);

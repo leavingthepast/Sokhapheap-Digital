@@ -2,10 +2,10 @@ import { Patient, MedicalRecord, Allergy, Vaccination, IllnessHistoryItem, LabRe
 import { CLOUD_DEPLOYED_URL } from './qrPayload';
 import { savePatientsToIDB, loadPatientsFromIDB } from './idbStorage';
 import { 
-  pushPatientToFirestore, 
-  fetchPatientFromFirestore, 
-  fetchAllPatientsFromFirestore 
-} from './firestoreService';
+  pushPatientToCloud, 
+  fetchPatientFromCloud, 
+  fetchAllPatientsFromCloud 
+} from './cloudSyncService';
 
 const API_BASE_URL = typeof window !== 'undefined' ? window.location.origin : CLOUD_DEPLOYED_URL;
 
@@ -160,7 +160,7 @@ export async function compressImageForUpload(
 }
 
 /**
- * Fetch patient from Cloud Firestore or backend API server by ID, token or email.
+ * Fetch patient from Cloud storage or backend API server by ID, token or email.
  */
 export async function fetchPatientFromServer(idOrToken: string): Promise<Patient | null> {
   if (!idOrToken) return null;
@@ -197,14 +197,14 @@ export async function fetchPatientFromServer(idOrToken: string): Promise<Patient
     console.warn('Could not fetch patient from server REST', e);
   }
 
-  // 2. Also check Cloud Firestore to ensure any cloud data is merged
+  // 2. Also check Cloud backend to ensure any cloud data is merged
   try {
-    const firestorePatient = await fetchPatientFromFirestore(idOrToken);
-    if (firestorePatient) {
-      result = result ? mergePatientRecords(result, firestorePatient) : firestorePatient;
+    const cloudPatient = await fetchPatientFromCloud(idOrToken);
+    if (cloudPatient) {
+      result = result ? mergePatientRecords(result, cloudPatient) : cloudPatient;
     }
   } catch (err) {
-    console.warn('[Firestore] Could not fetch from firestore directly:', err);
+    console.warn('[Cloud] Could not fetch from cloud directly:', err);
   }
 
   return result;
@@ -247,7 +247,7 @@ export async function savePatientToServer(patient: Patient, _userUid?: string): 
 }
 
 /**
- * Batch sync patients with IndexedDB, Cloud Firestore, and backend server.
+ * Batch sync patients with IndexedDB, Cloud storage, and backend server.
  */
 export async function syncPatientsWithServer(localPatients: Patient[], userUid?: string): Promise<Patient[]> {
   try {
@@ -264,19 +264,19 @@ export async function syncPatientsWithServer(localPatients: Patient[], userUid?:
       mergedMap.set(idbP.id, mergePatientRecords(existing, idbP));
     }
 
-    // 2. Cloud Firestore pull if user is logged in
+    // 2. Cloud pull if user is logged in
     const targetUid = userUid || (localPatients.find((p) => p.userId)?.userId);
     if (targetUid) {
       try {
-        const remoteFirestorePatients = await fetchAllPatientsFromFirestore(targetUid);
-        if (Array.isArray(remoteFirestorePatients) && remoteFirestorePatients.length > 0) {
-          for (const fp of remoteFirestorePatients) {
+        const remotePatients = await fetchAllPatientsFromCloud(targetUid);
+        if (Array.isArray(remotePatients) && remotePatients.length > 0) {
+          for (const fp of remotePatients) {
             const existing = mergedMap.get(fp.id);
             mergedMap.set(fp.id, mergePatientRecords(existing, fp));
           }
         }
       } catch (err) {
-        console.warn('[Firestore] Sync pull note:', err);
+        console.warn('[Cloud] Sync pull note:', err);
       }
     }
 

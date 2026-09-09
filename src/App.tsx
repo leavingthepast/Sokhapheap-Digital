@@ -10,10 +10,10 @@ import { parseCompactPatientPayload } from './utils/qrPayload';
 import { fetchPatientFromServer, savePatientToServer, syncPatientsWithServer, mergePatientRecords } from './utils/patientSync';
 import { savePatientsToIDB, loadPatientsFromIDB, saveSinglePatientToIDB, saveSingleRecordToIDB, clearAllFromIDB } from './utils/idbStorage';
 import { 
-  pushPatientToFirestore, 
-  fetchAllPatientsFromFirestore, 
-  subscribeToPatientFirestore 
-} from './utils/firestoreService';
+  pushPatientToCloud, 
+  fetchAllPatientsFromCloud, 
+  subscribeToPatientCloud 
+} from './utils/cloudSyncService';
 import { 
   signInWithSupabase,
   signUpWithSupabase,
@@ -436,7 +436,7 @@ function sanitizePatientData(p: Patient): Patient {
           setIsHydrated(true);
         }
 
-        // 2. Sync with remote server and Cloud Firestore
+        // 2. Sync with remote server and cloud storage
         const baseForSync = idbList && idbList.length > 0 ? idbList : patients;
         const synced = await syncPatientsWithServer(baseForSync, currentUser?.uid);
         if (isMounted && Array.isArray(synced) && synced.length > 0) {
@@ -511,11 +511,11 @@ function sanitizePatientData(p: Patient): Patient {
     };
   }, [patients, activeEmail, currentUser, isDoctorViewOpen, initialScanContext]);
 
-  // Real-time Cloud Firestore subscription for active logged-in patient
+  // Real-time Cloud subscription for active logged-in patient
   useEffect(() => {
     if (!currentUser?.uid || !currentPatient?.id) return;
 
-    const unsubscribe = subscribeToPatientFirestore(currentPatient.id, (remotePatient) => {
+    const unsubscribe = subscribeToPatientCloud(currentPatient.id, (remotePatient) => {
       if (remotePatient && remotePatient.id === currentPatient.id) {
         setPatients((prev) => {
           const idx = prev.findIndex((p) => p.id === remotePatient.id);
@@ -611,7 +611,7 @@ function sanitizePatientData(p: Patient): Patient {
         saveStoredPatients(patients);
         await savePatientsToIDB(patients).catch(() => {});
         await savePatientToServer(currentPatient, currentUser?.uid).catch(() => {});
-        const res = await pushPatientToFirestore(currentPatient, currentUser?.uid);
+        const res = await pushPatientToCloud(currentPatient, currentUser?.uid);
         return res.success;
       }
       return true;
@@ -642,7 +642,7 @@ function sanitizePatientData(p: Patient): Patient {
         nextList = [updatedTarget, ...prev];
       }
 
-      // 3. Persist to LocalStorage, IndexedDB, backend Server, and Cloud Firestore
+      // 3. Persist to LocalStorage, IndexedDB, backend Server, and Cloud Storage
       saveStoredPatients(nextList);
       savePatientsToIDB(nextList).catch(() => {});
       saveSinglePatientToIDB(updatedTarget).catch(() => {});
@@ -650,8 +650,8 @@ function sanitizePatientData(p: Patient): Patient {
         console.warn('savePatientToServer error:', err);
       });
       if (currentUser?.uid) {
-        pushPatientToFirestore(updatedTarget, currentUser.uid).catch((err) => {
-          console.warn('[Firestore] Live update push note:', err);
+        pushPatientToCloud(updatedTarget, currentUser.uid).catch((err) => {
+          console.warn('[Cloud] Live update push note:', err);
         });
       }
 
@@ -773,7 +773,38 @@ function sanitizePatientData(p: Patient): Patient {
     setIsAuthLoading(true);
     try {
       const lowerEmail = email.toLowerCase().trim();
-      const res = await signUpWithSupabase(name, lowerEmail, password);
+      let res: {
+        user: SupabaseUser | null;
+        session: any | null;
+        requiresEmailConfirmation: boolean;
+        message: string;
+      };
+
+      try {
+        res = await signUpWithSupabase(name, lowerEmail, password);
+      } catch (signUpErr: any) {
+        const isExisting = 
+          signUpErr?.code === 'user_already_exists' ||
+          signUpErr?.message?.toLowerCase().includes('already registered') ||
+          signUpErr?.message?.toLowerCase().includes('already exists');
+
+        if (isExisting && password) {
+          // If the account already exists, attempt to sign in with this password
+          try {
+            const loginRes = await signInWithSupabase(lowerEmail, password);
+            res = {
+              user: loginRes.user,
+              session: loginRes.session,
+              requiresEmailConfirmation: false,
+              message: 'Signed in successfully!',
+            };
+          } catch {
+            throw new Error('An account with this email already exists. Please click "Log in" and enter your account password.');
+          }
+        } else {
+          throw signUpErr;
+        }
+      }
 
       // Requirement:
       // After signUp(), if data.session is null, don’t redirect to the dashboard.
@@ -1317,6 +1348,7 @@ function sanitizePatientData(p: Patient): Patient {
         }}
         onSave={handleSaveMedicalRecord}
         initialFile={initialUploadFile}
+        userId={currentUser?.uid || currentPatient?.userId}
       />
 
       {/* View Medical Record / Document Modal */}

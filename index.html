@@ -12,6 +12,19 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+    <script>
+      // Prevent benign development WebSocket / HMR reconnection notices from triggering error overlays
+      window.addEventListener('unhandledrejection', function(event) {
+        var str = (event && event.reason && (event.reason.message || String(event.reason))) || '';
+        if (
+          str.indexOf('WebSocket closed without opened') !== -1 ||
+          str.indexOf('failed to connect to websocket') !== -1 ||
+          str.indexOf('[vite]') !== -1
+        ) {
+          event.preventDefault();
+        }
+      });
+    </script>
   </head>
   <body class="bg-[#f4f7f6] text-slate-800 antialiased font-sans selection:bg-teal-100 selection:text-teal-900">
     <div id="root"></div>

@@ -17,18 +17,32 @@ export interface UploadResult {
  */
 export async function uploadToSupabaseStorage(
   file: File | Blob,
-  fileName?: string
+  fileName?: string,
+  userUidOverride?: string
 ): Promise<UploadResult> {
   try {
     // 1. Get authenticated user ID for the folder path required by RLS
-    const { data: sessionData } = await supabase.auth.getSession();
-    const userId = sessionData?.session?.user?.id;
-
+    let userId = userUidOverride;
+    
     if (!userId) {
-      console.warn('User not authenticated with Supabase session. Uploading with anonymous fallback.');
+      const { data: sessionData } = await supabase.auth.getSession();
+      userId = sessionData?.session?.user?.id;
     }
 
-    const folder = userId || 'public';
+    if (!userId) {
+      const { data: userData } = await supabase.auth.getUser();
+      userId = userData?.user?.id;
+    }
+
+    if (!userId) {
+      return {
+        success: false,
+        url: '',
+        error: 'Please sign in to your account before uploading files to cloud storage.',
+      };
+    }
+
+    const folder = userId;
     const originalName = fileName || (file instanceof File ? file.name : 'document');
     const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
     const uniquePath = `${folder}/${Date.now()}-${safeName}`;
