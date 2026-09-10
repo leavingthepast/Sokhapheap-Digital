@@ -4,7 +4,8 @@ import { savePatientsToIDB, loadPatientsFromIDB } from './idbStorage';
 import { 
   pushPatientToCloud, 
   fetchPatientFromCloud, 
-  fetchAllPatientsFromCloud 
+  fetchAllPatientsFromCloud,
+  pushAllPatientsToCloud
 } from './cloudSyncService';
 
 const API_BASE_URL = typeof window !== 'undefined' ? window.location.origin : CLOUD_DEPLOYED_URL;
@@ -219,18 +220,23 @@ export async function fetchPatientFromServer(idOrToken: string): Promise<Patient
 /**
  * Save single patient (including newly uploaded documents) to IDB and backend server.
  */
-export async function savePatientToServer(patient: Patient, _userUid?: string): Promise<boolean> {
+export async function savePatientToServer(patient: Patient, userUid?: string): Promise<boolean> {
   // 1. Save to IndexedDB immediately for instant offline durability
   await savePatientsToIDB([patient]).catch(() => {});
 
   let serverSuccess = false;
   try {
-    // 2. Push to API backend with disk persistence
+    // 2. Push to Supabase Cloud
+    const result = await pushPatientToCloud(patient, userUid);
+    if (result.success) {
+      serverSuccess = true;
+    }
+
+    // 3. Optional: Push to API backend with disk persistence as fallback
     const endpoints = [
       '/api/patient',
       `${CLOUD_DEPLOYED_URL}/api/patient`
     ];
-
     for (const ep of endpoints) {
       try {
         const res = await fetch(ep, {
@@ -249,6 +255,7 @@ export async function savePatientToServer(patient: Patient, _userUid?: string): 
   } catch (e) {
     console.warn('Could not save patient to server', e);
   }
+
   return serverSuccess || true;
 }
 
@@ -264,13 +271,12 @@ export async function syncPatientsWithServer(localPatients: Patient[], userUid?:
     for (const p of localPatients) {
       mergedMap.set(p.id, p);
     }
-
     for (const idbP of idbPatients) {
       const existing = mergedMap.get(idbP.id);
       mergedMap.set(idbP.id, mergePatientRecords(existing, idbP));
     }
 
-    // 2. Cloud pull if user is logged in
+    // 2. Cloud pull from Supabase if user is logged in
     const targetUid = userUid || (localPatients.find((p) => p.userId)?.userId);
     if (targetUid) {
       try {
@@ -288,11 +294,15 @@ export async function syncPatientsWithServer(localPatients: Patient[], userUid?:
 
     const currentList = Array.from(mergedMap.values());
 
-    // 3. Push local patients to Server
+    // 3. Push local patients to Supabase Server
     if (currentList.length > 0) {
       await savePatientsToIDB(currentList).catch(() => {});
       
+      // Push batch to Supabase
+      await pushAllPatientsToCloud(currentList, targetUid);
+      
       try {
+        // Fallback backward compat with local express
         await fetch('/api/patients/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -303,7 +313,7 @@ export async function syncPatientsWithServer(localPatients: Patient[], userUid?:
       }
     }
 
-    // 5. Fetch latest patients from API backend
+    // 4. Fetch latest patients from API backend as final merge
     const res = await fetch('/api/patients');
     if (res.ok) {
       const data = await res.json();
@@ -325,15 +335,29 @@ export async function syncPatientsWithServer(localPatients: Patient[], userUid?:
   return localPatients;
 }
 
+import { supabase } from '../supabaseClient';
+
 /**
  * Permanently delete a patient's medical record on the server
  */
 export async function deletePatientRecordFromServer(patientId: string, recordId: string): Promise<boolean> {
   try {
+    // Delete from Supabase first
+    const { error } = await supabase
+      .from('medical_records')
+      .delete()
+      .eq('id', recordId)
+      .eq('patient_id', patientId);
+      
+    if (error) {
+      console.warn('Supabase delete record error:', error);
+    }
+    
+    // Also delete from local fallback
     const res = await fetch(`/api/patient/${encodeURIComponent(patientId)}/record/${encodeURIComponent(recordId)}`, {
       method: 'DELETE',
     });
-    return res.ok;
+    return res.ok || !error;
   } catch (err) {
     console.warn('deletePatientRecordFromServer error:', err);
     return false;
