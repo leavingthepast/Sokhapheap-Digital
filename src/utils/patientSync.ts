@@ -39,10 +39,15 @@ export function mergePatientRecords(localP?: Patient, remoteP?: Patient): Patien
   if (!localP) return remoteP!;
   if (!remoteP) return localP;
 
-  // Union medical records by id preserving all documents and images
+  const deletedRecordIds = new Set([
+    ...(localP.deletedRecordIds || []),
+    ...(remoteP.deletedRecordIds || [])
+  ]);
+
+  // Union medical records by id preserving all documents and images, ignoring deleted items
   const recordsMap = new Map<string, MedicalRecord>();
   const addOrMergeRecord = (r: MedicalRecord) => {
-    if (!r || !r.id) return;
+    if (!r || !r.id || deletedRecordIds.has(r.id)) return;
     const existing = recordsMap.get(r.id);
     if (!existing) {
       recordsMap.set(r.id, r);
@@ -92,7 +97,7 @@ export function mergePatientRecords(localP?: Patient, remoteP?: Patient): Patien
   return {
     ...remoteP,
     ...localP,
-    name: localP.name && localP.name !== 'Patient' ? localP.name : (remoteP.name || localP.name),
+    name: localP.name || remoteP.name || 'Patient',
     email: localP.email || remoteP.email,
     bloodType: localP.bloodType && localP.bloodType !== 'Unknown' ? localP.bloodType : (remoteP.bloodType || 'Unknown'),
     medicalRecords: Array.from(recordsMap.values()),
@@ -105,6 +110,7 @@ export function mergePatientRecords(localP?: Patient, remoteP?: Patient): Patien
     emergencyContact: localP.emergencyContact?.name ? localP.emergencyContact : (remoteP.emergencyContact || localP.emergencyContact),
     qrToken: localP.qrToken || remoteP.qrToken,
     qrTokenCreatedAt: localP.qrTokenCreatedAt || remoteP.qrTokenCreatedAt,
+    deletedRecordIds: Array.from(deletedRecordIds),
   };
 }
 
@@ -317,5 +323,20 @@ export async function syncPatientsWithServer(localPatients: Patient[], userUid?:
     console.warn('Server sync skipped, using local data', e);
   }
   return localPatients;
+}
+
+/**
+ * Permanently delete a patient's medical record on the server
+ */
+export async function deletePatientRecordFromServer(patientId: string, recordId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/patient/${encodeURIComponent(patientId)}/record/${encodeURIComponent(recordId)}`, {
+      method: 'DELETE',
+    });
+    return res.ok;
+  } catch (err) {
+    console.warn('deletePatientRecordFromServer error:', err);
+    return false;
+  }
 }
 

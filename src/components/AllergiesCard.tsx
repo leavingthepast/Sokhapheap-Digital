@@ -26,7 +26,7 @@ export const AllergiesCard: React.FC<AllergiesCardProps> = ({
   const handleAdd = onAdd || onAddAllergy;
   const handleEdit = onEdit || onEditAllergy;
   const handleDelete = onDelete || onDeleteAllergy;
-  const safeAllergies = Array.isArray(allergies) ? allergies : [];
+  const safeAllergies = Array.isArray(allergies) ? allergies.filter(Boolean) : [];
 
   return (
     <div 

@@ -96,5 +96,6 @@ export interface Patient {
   qrToken: string;
   qrTokenCreatedAt: string;
   accessRequests?: QrAccessRequest[];
+  deletedRecordIds?: string[];
 }
 

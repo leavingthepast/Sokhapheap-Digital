@@ -114,6 +114,7 @@ export const TRANSLATIONS = {
     saveVaccine: 'Save Vaccine',
 
     addMedicalRecordTitle: 'Add Medical Record & Document',
+    editMedicalRecord: 'Edit Medical Record & Document',
     uploadPrompt: 'Upload document (PDF, PNG, JPG, or Scan)',
     uploadSubPrompt: 'Prescription, Lab Slip, Health Certificate, or Radiograph',
     browseFile: 'Browse File / Photo',
@@ -338,6 +339,7 @@ export const TRANSLATIONS = {
     saveVaccine: 'រក្សាទុកវ៉ាក់សាំង',
 
     addMedicalRecordTitle: 'បន្ថែមឯកសារ និងកំណត់ត្រាវេជ្ជសាស្ត្រ',
+    editMedicalRecord: 'កែប្រែឯកសារ និងកំណត់ត្រាវេជ្ជសាស្ត្រ',
     uploadPrompt: 'បញ្ចូលឯកសារ (រូបភាព PNG, JPG, PDF ឬស្កេន)',
     uploadSubPrompt: 'វេជ្ជបញ្ជា ស្លាកពិនិត្យឈាម វិញ្ញាបនបត្រសុខភាព ឬរូបភាពកាំរស្មីអ៊ិច',
     browseFile: 'ជ្រើសរើសរូបភាព / ឯកសារ',

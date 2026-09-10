@@ -26,8 +26,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenNotifications,
 }) => {
   const { t } = useLanguage();
-  const initial = patient.name ? patient.name.charAt(0).toUpperCase() : 'P';
-  const allRequests = patient.accessRequests || [];
+  const initial = patient?.name ? patient.name.charAt(0).toUpperCase() : 'P';
+  const allRequests = patient?.accessRequests || [];
   const pendingCount = allRequests.filter((r) => r.status === 'pending').length;
   const allowedCount = allRequests.filter((r) => r.status === 'allowed').length;
   const totalCount = allRequests.length;
@@ -181,10 +181,10 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div className="flex items-center gap-2">
               <div 
                 className="w-9 h-9 rounded-full bg-teal-100 text-teal-800 font-bold flex items-center justify-center text-sm border border-teal-200 shadow-2xs select-none overflow-hidden"
-                title={`Patient: ${patient.name}`}
+                title={`Patient: ${patient?.name || 'Patient'}`}
               >
-                {patient.profilePicture ? (
-                  <img src={patient.profilePicture} alt={patient.name} className="w-full h-full object-cover" />
+                {patient?.profilePicture ? (
+                  <img src={patient.profilePicture} alt={patient?.name || 'Patient'} className="w-full h-full object-cover" />
                 ) : (
                   initial
                 )}

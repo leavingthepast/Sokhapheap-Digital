@@ -26,7 +26,7 @@ export const VaccinationsCard: React.FC<VaccinationsCardProps> = ({
   const handleAdd = onAdd || onAddVaccination;
   const handleEdit = onEdit || onEditVaccination;
   const handleDelete = onDelete || onDeleteVaccination;
-  const safeVaccinations = Array.isArray(vaccinations) ? vaccinations : [];
+  const safeVaccinations = Array.isArray(vaccinations) ? vaccinations.filter(Boolean) : [];
 
   return (
     <div 

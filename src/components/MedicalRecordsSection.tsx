@@ -4,6 +4,7 @@ import {
   Plus, 
   Search, 
   Eye, 
+  Pencil,
   Trash2, 
   Calendar, 
   Building2, 
@@ -23,6 +24,7 @@ import { PdfThumbnail } from './PdfThumbnail';
 interface MedicalRecordsSectionProps {
   records: MedicalRecord[];
   onAddRecord: (file?: File) => void;
+  onEditRecord?: (record: MedicalRecord) => void;
   onViewRecord: (record: MedicalRecord) => void;
   onDeleteRecord: (id: string) => void;
 }
@@ -30,6 +32,7 @@ interface MedicalRecordsSectionProps {
 export const MedicalRecordsSection: React.FC<MedicalRecordsSectionProps> = ({
   records,
   onAddRecord,
+  onEditRecord,
   onViewRecord,
   onDeleteRecord,
 }) => {
@@ -40,28 +43,30 @@ export const MedicalRecordsSection: React.FC<MedicalRecordsSectionProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
-  const filteredRecords = records.filter((rec) => {
+  const filteredRecords = (records || []).filter((rec) => {
+    if (!rec) return false;
     const matchesType = filterType === 'ALL' || rec.type === filterType;
     const matchesSearch =
-      rec.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      rec.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (rec.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (rec.description || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (rec.doctorOrClinic && rec.doctorOrClinic.toLowerCase().includes(searchQuery.toLowerCase()));
     return matchesType && matchesSearch;
   });
 
   const countByType = (type: string) => {
-    if (type === 'ALL') return records.length;
-    return records.filter((r) => r.type === type).length;
+    if (type === 'ALL') return (records || []).filter(Boolean).length;
+    return (records || []).filter((r) => r && r.type === type).length;
   };
 
   const isPdfRecord = (rec: MedicalRecord) => {
     return rec.fileType === 'pdf' || 
       rec.imageUrl?.startsWith('data:application/pdf') || 
-      (rec.fileName && rec.fileName.toLowerCase().endsWith('.pdf'));
+      (rec.fileName && rec.fileName.toLowerCase().endsWith('.pdf')) ||
+      (rec.imageUrl && rec.imageUrl.toLowerCase().endsWith('.pdf'));
   };
 
   const getRecordThumbnail = (rec: MedicalRecord) => {
-    if (rec.imageUrl && !rec.imageUrl.startsWith('data:application/pdf')) {
+    if (rec.imageUrl && !isPdfRecord(rec)) {
       return rec.imageUrl;
     }
     if (rec.type === 'Prescription') return DOCUMENT_IMAGES.prescriptionCalmette;
@@ -365,6 +370,18 @@ export const MedicalRecordsSection: React.FC<MedicalRecordsSectionProps> = ({
                     <Eye className="w-3.5 h-3.5" />
                     <span>{isPdf ? 'View PDF' : t.viewPicture}</span>
                   </button>
+
+                  {onEditRecord && (
+                    <button
+                      type="button"
+                      onClick={() => onEditRecord(rec)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-xl border border-slate-200 hover:border-teal-300 bg-white hover:bg-slate-50 text-slate-700 transition-colors cursor-pointer"
+                      title={t.edit || 'Edit Document'}
+                    >
+                      <Pencil className="w-3.5 h-3.5 text-slate-500" />
+                      <span>{t.edit || 'Edit'}</span>
+                    </button>
+                  )}
 
                   <button
                     type="button"

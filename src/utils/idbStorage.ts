@@ -144,6 +144,43 @@ export async function saveSingleRecordToIDB(patientId: string, record: MedicalRe
 }
 
 /**
+ * Delete a single medical record from IndexedDB permanently
+ */
+export async function deleteRecordFromIDB(patientId: string, recordId: string): Promise<void> {
+  if (!patientId || !recordId) return;
+  try {
+    const db = await openDatabase();
+    const tx = db.transaction([STORE_PATIENTS, STORE_RECORDS], 'readwrite');
+    const rStore = tx.objectStore(STORE_RECORDS);
+    const pStore = tx.objectStore(STORE_PATIENTS);
+
+    rStore.delete(recordId);
+
+    const pReq = pStore.get(patientId);
+    pReq.onsuccess = () => {
+      const patient: Patient = pReq.result;
+      if (patient) {
+        const records = (patient.medicalRecords || []).filter((r) => r.id !== recordId);
+        const deletedSet = new Set(patient.deletedRecordIds || []);
+        deletedSet.add(recordId);
+        pStore.put({
+          ...patient,
+          medicalRecords: records,
+          deletedRecordIds: Array.from(deletedSet),
+        });
+      }
+    };
+
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (err) {
+    console.warn('IndexedDB deleteRecordFromIDB error:', err);
+  }
+}
+
+/**
  * Load all patients with all their uploaded documents from IndexedDB
  */
 export async function loadPatientsFromIDB(): Promise<Patient[]> {
@@ -179,12 +216,32 @@ export async function loadPatientsFromIDB(): Promise<Patient[]> {
       });
     }
 
-    for (const r of allRecords) {
-      if (r && r.patientId && patientMap.has(r.patientId)) {
-        const patient = patientMap.get(r.patientId)!;
-        const exists = patient.medicalRecords.some((existing) => existing.id === r.id);
-        if (!exists) {
-          patient.medicalRecords.unshift(r);
+    // Attach stored high-res images to existing records without resurrecting deleted ones
+    for (const patient of patientMap.values()) {
+      const deletedSet = new Set(patient.deletedRecordIds || []);
+      // Filter out any record that was marked deleted
+      patient.medicalRecords = (patient.medicalRecords || []).filter(
+        (r) => r && r.id && !deletedSet.has(r.id)
+      );
+
+      // Attach stored high-res images to existing records and restore any missing records
+      for (const rec of patient.medicalRecords) {
+        if (!rec.imageUrl) {
+          const storedR = allRecords.find((ar) => ar && ar.id === rec.id);
+          if (storedR && storedR.imageUrl) {
+            rec.imageUrl = storedR.imageUrl;
+          }
+        }
+      }
+
+      // If rStore has records saved for this patient that aren't in patient.medicalRecords yet, attach them
+      for (const ar of allRecords) {
+        if (ar && ar.id && ar.patientId === patient.id && !deletedSet.has(ar.id)) {
+          const exists = patient.medicalRecords.some((r) => r.id === ar.id);
+          if (!exists) {
+            const { patientId: _pid, ...cleanRecord } = ar;
+            patient.medicalRecords.push(cleanRecord as MedicalRecord);
+          }
         }
       }
     }

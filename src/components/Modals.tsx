@@ -30,6 +30,7 @@ import { DOCUMENT_IMAGES } from '../data/documentImages';
 import { triggerPrintDocument } from '../utils/printHelper';
 import { compressImageForUpload } from '../utils/patientSync';
 import { uploadToSupabaseStorage } from '../utils/supabaseStorage';
+import { uploadMedicalDocument } from '../utils/fileUpload';
 import { PdfViewer } from './PdfViewer';
 
 // ==========================================
@@ -382,12 +383,13 @@ export const VaccinationModal: React.FC<VaccinationModalProps> = ({
 };
 
 // ==========================================
-// 4. Add Medical Record Modal (With Real PDF, Image & Scan Upload)
+// 4. Add Medical Record Modal (With Real PDF, Image & Scan Upload & Edit Support)
 // ==========================================
 interface AddRecordModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (record: MedicalRecord) => void;
+  recordToEdit?: MedicalRecord | null;
   initialFile?: File | null;
   userId?: string;
 }
@@ -396,19 +398,20 @@ export const AddMedicalRecordModal: React.FC<AddRecordModalProps> = ({
   isOpen,
   onClose,
   onSave,
+  recordToEdit,
   initialFile,
   userId,
 }) => {
   const { t } = useLanguage();
-  const [name, setName] = useState('');
-  const [type, setType] = useState<RecordType>('Prescription');
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [doctorOrClinic, setDoctorOrClinic] = useState('');
-  const [description, setDescription] = useState('');
-  const [fileName, setFileName] = useState('');
-  const [fileSize, setFileSize] = useState('');
-  const [fileType, setFileType] = useState<'pdf' | 'image' | 'document'>('image');
-  const [uploadedFileUrl, setUploadedFileUrl] = useState<string>('');
+  const [name, setName] = useState(recordToEdit?.name || '');
+  const [type, setType] = useState<RecordType>(recordToEdit?.type || 'Prescription');
+  const [date, setDate] = useState(recordToEdit?.date || new Date().toISOString().split('T')[0]);
+  const [doctorOrClinic, setDoctorOrClinic] = useState(recordToEdit?.doctorOrClinic || '');
+  const [description, setDescription] = useState(recordToEdit?.description || '');
+  const [fileName, setFileName] = useState(recordToEdit?.fileName || '');
+  const [fileSize, setFileSize] = useState(recordToEdit?.fileSize || '');
+  const [fileType, setFileType] = useState<'pdf' | 'image' | 'document'>(recordToEdit?.fileType || 'image');
+  const [uploadedFileUrl, setUploadedFileUrl] = useState<string>(recordToEdit?.imageUrl || '');
   const [previewItems, setPreviewItems] = useState<string[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -417,6 +420,34 @@ export const AddMedicalRecordModal: React.FC<AddRecordModalProps> = ({
   const [isUploadingStorage, setIsUploadingStorage] = useState(false);
   const [storageBucketUsed, setStorageBucketUsed] = useState<string | null>(null);
   const [storageError, setStorageError] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (isOpen) {
+      if (recordToEdit) {
+        setName(recordToEdit.name || '');
+        setType(recordToEdit.type || 'Prescription');
+        setDate(recordToEdit.date || new Date().toISOString().split('T')[0]);
+        setDoctorOrClinic(recordToEdit.doctorOrClinic || '');
+        setDescription(recordToEdit.description || '');
+        setFileName(recordToEdit.fileName || '');
+        setFileSize(recordToEdit.fileSize || '');
+        setFileType(recordToEdit.fileType || 'image');
+        setUploadedFileUrl(recordToEdit.imageUrl || '');
+        setPreviewItems(recordToEdit.previewContent?.items || []);
+      } else {
+        setName('');
+        setType('Prescription');
+        setDate(new Date().toISOString().split('T')[0]);
+        setDoctorOrClinic('');
+        setDescription('');
+        setFileName('');
+        setFileSize('');
+        setFileType('image');
+        setUploadedFileUrl('');
+        setPreviewItems([]);
+      }
+    }
+  }, [isOpen, recordToEdit]);
 
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const cameraInputRef = React.useRef<HTMLInputElement>(null);
@@ -457,48 +488,33 @@ export const AddMedicalRecordModal: React.FC<AddRecordModalProps> = ({
       setType('Medical Report');
     }
 
-    // 1. Upload file directly to Supabase Storage bucket ('app.files')
-    uploadToSupabaseStorage(file, file.name, userId)
+    // Upload file using resilient multi-tier uploader (local server disk -> Supabase -> local cache)
+    uploadMedicalDocument(file, userId)
       .then((res) => {
         if (res.success && res.url) {
           setUploadedFileUrl(res.url);
-          setStorageBucketUsed(res.bucket || 'app.files');
+          setFileType(res.fileType);
+          setFileName(res.fileName);
+          setFileSize(res.fileSize);
+          setStorageBucketUsed(
+            res.storageProvider === 'server'
+              ? 'Local Server Disk'
+              : res.storageProvider === 'supabase'
+              ? 'Supabase Storage'
+              : 'Local Storage'
+          );
         } else if (res.error) {
           setStorageError(res.error);
         }
         setIsUploadingStorage(false);
+        setIsProcessing(false);
       })
       .catch((err) => {
-        console.warn('Storage upload warning:', err);
-        setStorageError(err?.message || 'Storage upload failed');
+        console.warn('Document upload notice:', err);
+        setStorageError(err?.message || 'Upload failed');
         setIsUploadingStorage(false);
+        setIsProcessing(false);
       });
-
-    // 2. Read local file for instant preview thumbnail while storage upload completes
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const result = event.target?.result as string;
-      if (result) {
-        if (isPdf) {
-          setUploadedFileUrl((curr) => curr && curr.startsWith('http') ? curr : result);
-          setIsProcessing(false);
-        } else {
-          try {
-            // Compress high-res images to optimize preview
-            const compressed = await compressImageForUpload(result, 1600, 0.85);
-            setUploadedFileUrl((curr) => curr && curr.startsWith('http') ? curr : compressed);
-          } catch {
-            setUploadedFileUrl((curr) => curr && curr.startsWith('http') ? curr : result);
-          } finally {
-            setIsProcessing(false);
-          }
-        }
-      }
-    };
-    reader.onerror = () => {
-      setIsProcessing(false);
-    };
-    reader.readAsDataURL(file);
   }, [name]);
 
   React.useEffect(() => {
@@ -550,7 +566,7 @@ export const AddMedicalRecordModal: React.FC<AddRecordModalProps> = ({
     if (!name.trim()) return;
 
     // Determine fallback authentic document if none uploaded
-    let finalFileUrl = uploadedFileUrl;
+    let finalFileUrl = uploadedFileUrl || recordToEdit?.imageUrl || '';
     let finalFileType = fileType;
     if (!finalFileUrl) {
       if (type === 'Prescription') {
@@ -568,33 +584,33 @@ export const AddMedicalRecordModal: React.FC<AddRecordModalProps> = ({
       }
     }
 
-    const newRecord: MedicalRecord = {
-      id: `rec-${Date.now()}`,
+    const finalRecord: MedicalRecord = {
+      id: recordToEdit?.id || `rec-${Date.now()}`,
       name: name.trim(),
       type,
       date,
       doctorOrClinic: doctorOrClinic.trim() || undefined,
       description: description.trim() || `${type} document issued on ${date}`,
-      fileName: fileName || `${name.trim().toLowerCase().replace(/\s+/g, '_')}.${finalFileType === 'pdf' ? 'pdf' : 'jpg'}`,
-      fileSize: fileSize || (uploadedFileUrl ? (finalFileType === 'pdf' ? '1.8 MB' : '1.4 MB') : '520 KB'),
+      fileName: fileName || recordToEdit?.fileName || `${name.trim().toLowerCase().replace(/\s+/g, '_')}.${finalFileType === 'pdf' ? 'pdf' : 'jpg'}`,
+      fileSize: fileSize || recordToEdit?.fileSize || (uploadedFileUrl ? (finalFileType === 'pdf' ? '1.8 MB' : '1.4 MB') : '520 KB'),
       fileType: finalFileType,
       imageUrl: finalFileUrl,
       previewContent: {
         clinicName: doctorOrClinic || 'Verified Clinical Facility',
         doctorName: 'Attending Practitioner',
         diagnosisOrTest: name,
-        items: previewItems.length > 0 ? previewItems : [
+        items: previewItems.length > 0 ? previewItems : (recordToEdit?.previewContent?.items || [
           `Document: ${name}`,
           `Type: ${type}`,
           `Format: ${finalFileType.toUpperCase()}`,
           `Date of record: ${date}`,
           description || 'Document successfully added to personal health record'
-        ],
+        ]),
         rawNotes: description,
       },
     };
 
-    onSave(newRecord);
+    onSave(finalRecord);
     // Reset form
     setName('');
     setDescription('');
@@ -614,7 +630,9 @@ export const AddMedicalRecordModal: React.FC<AddRecordModalProps> = ({
               <Upload className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-slate-900 leading-tight">{t.addMedicalRecordTitle}</h2>
+              <h2 className="text-lg font-bold text-slate-900 leading-tight">
+                {recordToEdit ? (t.editMedicalRecord || 'Edit Medical Document') : t.addMedicalRecordTitle}
+              </h2>
               <p className="text-xs text-slate-500">PDF, PNG, JPG, WebP, or Camera Scans</p>
             </div>
           </div>
@@ -709,22 +727,22 @@ export const AddMedicalRecordModal: React.FC<AddRecordModalProps> = ({
                   </button>
                 </div>
 
-                {/* Supabase Storage Sync Indicator */}
+                {/* Storage Sync Indicator */}
                 <div className="flex items-center justify-center pt-1">
                   {isUploadingStorage ? (
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-teal-50 text-teal-800 border border-teal-200 text-[11px] font-semibold animate-pulse">
                       <Loader2 className="w-3.5 h-3.5 animate-spin text-teal-600" />
-                      <span>Uploading to Supabase Storage...</span>
+                      <span>Saving file to persistent storage...</span>
                     </span>
                   ) : storageBucketUsed ? (
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-200 text-[11px] font-bold">
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                      <span>Uploaded to Supabase Storage ({storageBucketUsed})</span>
+                      <span>Saved to {storageBucketUsed}</span>
                     </span>
                   ) : storageError ? (
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 text-[10.5px] font-medium" title={storageError}>
                       <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                      <span>Ready locally (Storage upload note: {storageError})</span>
+                      <span>Ready locally</span>
                     </span>
                   ) : null}
                 </div>
@@ -862,10 +880,10 @@ export const AddMedicalRecordModal: React.FC<AddRecordModalProps> = ({
               {isUploadingStorage ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>Uploading to Storage...</span>
+                  <span>Saving...</span>
                 </>
               ) : (
-                <span>{t.saveRecord}</span>
+                <span>{recordToEdit ? (t.saveChanges || 'Save Changes') : t.saveRecord}</span>
               )}
             </button>
           </div>
@@ -923,6 +941,7 @@ interface DocumentViewerModalProps {
   isOpen: boolean;
   onClose: () => void;
   allowDownload?: boolean;
+  isRestrictedMode?: boolean;
 }
 
 export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
@@ -930,17 +949,35 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
   isOpen,
   onClose,
   allowDownload = true,
+  isRestrictedMode = false,
 }) => {
   const { t } = useLanguage();
   const [zoomLevel, setZoomLevel] = useState(1);
   const [rotation, setRotation] = useState(0);
   const [activeView, setActiveView] = useState<'document' | 'details'>('document');
 
+  // Strict view-only mode is active if isRestrictedMode is true OR allowDownload is false
+  const isStrictViewOnly = isRestrictedMode || !allowDownload;
+
   React.useEffect(() => {
     setZoomLevel(1);
     setRotation(0);
     setActiveView('document');
   }, [record, isOpen]);
+
+  // Intercept keyboard print/save shortcuts in restricted view-only mode
+  React.useEffect(() => {
+    if (!isOpen || !isStrictViewOnly) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && ['p', 's', 'P', 'S'].includes(e.key)) {
+        e.preventDefault();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, isStrictViewOnly]);
 
   if (!isOpen || !record) return null;
 
@@ -953,14 +990,16 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
     else fileUrl = DOCUMENT_IMAGES.xrayRadiology;
   }
 
-  // Detect whether this is a PDF document
+  // Automatic File Detection: Check whether this is a PDF document
   const isPdf = 
     record.fileType === 'pdf' || 
-    fileUrl.startsWith('data:application/pdf') || 
-    (record.fileName && record.fileName.toLowerCase().endsWith('.pdf'));
+    (fileUrl && fileUrl.startsWith('data:application/pdf')) || 
+    (record.fileName && record.fileName.toLowerCase().endsWith('.pdf')) ||
+    (fileUrl && fileUrl.toLowerCase().endsWith('.pdf')) ||
+    (typeof fileUrl === 'string' && fileUrl.includes('.pdf?'));
 
   const handleDownload = () => {
-    if (!fileUrl) return;
+    if (!fileUrl || isStrictViewOnly) return;
     const a = document.createElement('a');
     a.href = fileUrl;
     const defaultExt = isPdf ? '.pdf' : '.jpg';
@@ -972,7 +1011,7 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
   };
 
   const handleOpenInNewTab = () => {
-    if (!fileUrl) return;
+    if (!fileUrl || isStrictViewOnly) return;
     if (fileUrl.startsWith('data:')) {
       const newWin = window.open();
       if (newWin) {
@@ -992,12 +1031,27 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
   };
 
   const handlePrint = () => {
+    if (isStrictViewOnly) return;
     triggerPrintDocument('document-viewer-content', record.name);
   };
 
+  const handleContextMenu = (e: React.MouseEvent) => {
+    if (isStrictViewOnly) {
+      e.preventDefault();
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
-      <div className="bg-white rounded-3xl max-w-4xl w-full flex flex-col max-h-[94vh] shadow-2xl border border-slate-200 overflow-hidden">
+    <div 
+      className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto"
+      onContextMenu={handleContextMenu}
+      style={isStrictViewOnly ? { userSelect: 'none', WebkitUserSelect: 'none' } : undefined}
+    >
+      <div 
+        className="bg-white rounded-3xl max-w-4xl w-full flex flex-col max-h-[94vh] shadow-2xl border border-slate-200 overflow-hidden"
+        onContextMenu={handleContextMenu}
+        style={isStrictViewOnly ? { userSelect: 'none', WebkitUserSelect: 'none' } : undefined}
+      >
         {/* Modal Header */}
         <div className="p-4 sm:p-5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-slate-50/90">
           <div className="flex items-center gap-3">
@@ -1009,7 +1063,7 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
               {isPdf ? <FileText className="w-5 h-5" /> : <ImageIcon className="w-5 h-5" />}
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-base font-bold text-slate-900 leading-tight">
                   {record.name}
                 </h2>
@@ -1018,6 +1072,12 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
                 }`}>
                   {isPdf ? 'PDF Document' : record.type}
                 </span>
+                {isStrictViewOnly && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 border border-amber-300">
+                    <Lock className="w-2.5 h-2.5 text-amber-700" />
+                    <span>View-Only Mode</span>
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-500">
                 {record.doctorOrClinic ? `${record.doctorOrClinic} • ` : ''}
@@ -1062,7 +1122,7 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
         {/* Modal Toolbar */}
         {activeView === 'document' && (
           <div className="px-4 py-2 border-b border-slate-200 bg-white flex flex-wrap items-center justify-between gap-2 text-xs font-semibold text-slate-700">
-            {/* Image controls (if not PDF) */}
+            {/* Image zoom / orientation controls (for images or fallback) */}
             {!isPdf ? (
               <div className="flex items-center gap-1">
                 <button
@@ -1104,50 +1164,53 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
                 </button>
               </div>
             ) : (
-              <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
+              <div className="flex items-center gap-2 text-xs text-slate-600 font-medium">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span>Interactive PDF Document Viewer</span>
+                <span>HTML5 Canvas PDF Viewer</span>
               </div>
             )}
 
+            {/* Action Buttons: If restricted/view-only, download/print/open-new-tab are completely removed */}
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleOpenInNewTab}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg transition-colors cursor-pointer"
-                title="Open in new window"
-              >
-                <Maximize2 className="w-3.5 h-3.5 text-slate-600" />
-                <span className="hidden sm:inline">Open Full View</span>
-              </button>
-
-              {allowDownload ? (
-                <button
-                  type="button"
-                  onClick={handleDownload}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg transition-colors cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5 text-slate-600" />
-                  <span>{isPdf ? 'Download PDF' : t.downloadPicture}</span>
-                </button>
-              ) : (
+              {isStrictViewOnly ? (
                 <div
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-500 text-xs font-semibold rounded-lg border border-slate-200"
-                  title="File downloads are disabled for QR code viewers"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 text-amber-900 text-xs font-bold rounded-xl border border-amber-200 select-none shadow-2xs"
+                  title="Document downloading, exporting, and printing are disabled for secure view-only access"
                 >
-                  <Lock className="w-3.5 h-3.5 text-slate-400" />
-                  <span>View Only (Download Disabled)</span>
+                  <Lock className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                  <span>View Only (Download &amp; Print Restricted)</span>
                 </div>
-              )}
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleOpenInNewTab}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg transition-colors cursor-pointer"
+                    title="Open in new window"
+                  >
+                    <Maximize2 className="w-3.5 h-3.5 text-slate-600" />
+                    <span className="hidden sm:inline">Open Full View</span>
+                  </button>
 
-              <button
-                type="button"
-                onClick={handlePrint}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-teal-700 hover:bg-teal-800 text-white rounded-lg transition-colors shadow-2xs cursor-pointer"
-              >
-                <Printer className="w-3.5 h-3.5" />
-                <span>{t.printDocument}</span>
-              </button>
+                  <button
+                    type="button"
+                    onClick={handleDownload}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5 text-slate-600" />
+                    <span>{isPdf ? 'Download PDF' : t.downloadPicture}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handlePrint}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-teal-700 hover:bg-teal-800 text-white rounded-lg transition-colors shadow-2xs cursor-pointer"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>{t.printDocument}</span>
+                  </button>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -1156,31 +1219,53 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
         <div 
           id="document-viewer-content"
           className="flex-1 overflow-auto p-2 sm:p-6 bg-slate-100 flex items-center justify-center min-h-[420px]"
+          onContextMenu={handleContextMenu}
+          style={isStrictViewOnly ? { userSelect: 'none', WebkitUserSelect: 'none' } : undefined}
         >
           {activeView === 'document' ? (
             isPdf ? (
-              /* Universal Mobile-Optimized PDF Viewer */
+              /* Universal Mobile-Optimized HTML5 Canvas PDF Viewer */
               <div className="w-full flex flex-col items-center justify-center">
                 <PdfViewer
                   pdfUrl={fileUrl}
                   fileName={record.fileName || record.name}
                   className="w-full"
+                  isRestrictedMode={isStrictViewOnly}
                 />
               </div>
             ) : (
-              /* Image Viewer Rendering */
-              <div className="w-full flex items-center justify-center p-2">
+              /* Protected Image Viewer Rendering */
+              <div 
+                className="w-full flex items-center justify-center p-2 select-none touch-pan-x touch-pan-y"
+                onContextMenu={handleContextMenu}
+                style={isStrictViewOnly ? { userSelect: 'none', WebkitUserSelect: 'none' } : undefined}
+              >
                 <div 
-                  className="transition-transform duration-200 origin-center bg-white shadow-xl rounded-xl overflow-hidden max-w-full"
+                  className="relative transition-transform duration-200 origin-center bg-white shadow-xl rounded-xl overflow-hidden max-w-full"
                   style={{
                     transform: `scale(${zoomLevel}) rotate(${rotation}deg)`,
+                    userSelect: 'none',
+                    WebkitUserSelect: 'none',
                   }}
                 >
                   <img
                     src={fileUrl}
                     alt={record.name}
-                    className="max-h-[68vh] w-auto object-contain select-none pointer-events-auto"
+                    draggable={false}
+                    onDragStart={(e) => e.preventDefault()}
+                    onContextMenu={handleContextMenu}
+                    className="max-h-[68vh] sm:max-h-[74vh] w-auto max-w-full object-contain select-none pointer-events-auto"
+                    style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
                   />
+
+                  {/* View-Only Security Watermark Overlay */}
+                  {isStrictViewOnly && (
+                    <div className="absolute inset-0 pointer-events-none flex items-center justify-center opacity-[0.06] select-none">
+                      <span className="text-xl sm:text-3xl font-black text-slate-900 uppercase tracking-widest rotate-[-30deg]">
+                        VIEW-ONLY • PROTECTED CLINICAL SCAN
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
             )
@@ -1297,32 +1382,33 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
   onSave,
 }) => {
   const { t } = useLanguage();
-  const [name, setName] = useState(patient.name || '');
-  const [phone, setPhone] = useState(patient.phone || '');
-  const [profilePicture, setProfilePicture] = useState<string>(patient.profilePicture || '');
-  const [dob, setDob] = useState(patient.dob || '');
-  const [gender, setGender] = useState<'Female' | 'Male' | 'Other'>(patient.gender || 'Female');
-  const [emergencyName, setEmergencyName] = useState(patient.emergencyContact?.name || '');
-  const [emergencyRelationship, setEmergencyRelationship] = useState(patient.emergencyContact?.relationship || '');
-  const [emergencyPhone, setEmergencyPhone] = useState(patient.emergencyContact?.phone || '');
+  const [name, setName] = useState(patient?.name || '');
+  const [phone, setPhone] = useState(patient?.phone || '');
+  const [profilePicture, setProfilePicture] = useState<string>(patient?.profilePicture || '');
+  const [dob, setDob] = useState(patient?.dob || '');
+  const [gender, setGender] = useState<'Female' | 'Male' | 'Other'>(patient?.gender || 'Female');
+  const [emergencyName, setEmergencyName] = useState(patient?.emergencyContact?.name || '');
+  const [emergencyRelationship, setEmergencyRelationship] = useState(patient?.emergencyContact?.relationship || '');
+  const [emergencyPhone, setEmergencyPhone] = useState(patient?.emergencyContact?.phone || '');
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [photoStorageSuccess, setPhotoStorageSuccess] = useState(false);
 
   React.useEffect(() => {
     if (isOpen) {
-      setName(patient.name || '');
-      setPhone(patient.phone || '');
-      setProfilePicture(patient.profilePicture || '');
-      setDob(patient.dob || '');
-      setGender(patient.gender || 'Female');
-      setEmergencyName(patient.emergencyContact?.name || '');
-      setEmergencyRelationship(patient.emergencyContact?.relationship || '');
-      setEmergencyPhone(patient.emergencyContact?.phone || '');
+      setName(patient?.name || '');
+      setPhone(patient?.phone || '');
+      setProfilePicture(patient?.profilePicture || '');
+      setDob(patient?.dob || '');
+      setGender(patient?.gender || 'Female');
+      setEmergencyName(patient?.emergencyContact?.name || '');
+      setEmergencyRelationship(patient?.emergencyContact?.relationship || '');
+      setEmergencyPhone(patient?.emergencyContact?.phone || '');
+      setIsUploadingPhoto(false);
+      setPhotoStorageSuccess(false);
     }
   }, [isOpen, patient]);
 
   if (!isOpen) return null;
-
-  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
-  const [photoStorageSuccess, setPhotoStorageSuccess] = useState(false);
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1368,8 +1454,8 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
     onSave({
       name: name.trim(),
       phone: phone.trim(),
-      profilePicture: profilePicture || undefined,
-      dob: dob || undefined,
+      profilePicture: profilePicture,
+      dob: dob,
       gender,
       emergencyContact: {
         name: emergencyName.trim() || patient.emergencyContact?.name || 'Emergency Contact',
@@ -1490,12 +1576,11 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
           {/* Phone Number */}
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">
-              {t.phoneNumber || 'Phone Number'} *
+              {t.phoneNumber || 'Phone Number'}
             </label>
             <div className="relative">
               <input
                 type="tel"
-                required
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="e.g. +855 12 345 678"

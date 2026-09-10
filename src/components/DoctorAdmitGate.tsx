@@ -266,19 +266,19 @@ export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
         {/* Patient Identity Header Banner */}
         <div className="flex items-center gap-4 pb-6 border-b border-slate-700/80">
           <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-teal-500 to-cyan-700 flex items-center justify-center text-white text-xl font-black shadow-lg">
-            {patient.name.charAt(0)}
+            {(patient?.name || 'P').charAt(0)}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="text-lg sm:text-xl font-bold text-white truncate">
-                {patient.name}
+                {patient?.name || 'Patient'}
               </h1>
               <span className="text-[10px] font-extrabold uppercase tracking-wider bg-slate-700 text-slate-300 px-2 py-0.5 rounded-md">
-                {patient.id}
+                {patient?.id}
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
-              Token: <span className="font-mono text-teal-400">{patient.qrToken}</span> • {patient.gender}
+              Token: <span className="font-mono text-teal-400">{patient?.qrToken}</span> • {patient?.gender || 'N/A'}
             </p>
           </div>
         </div>

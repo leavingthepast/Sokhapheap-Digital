@@ -7,8 +7,8 @@ import {
 } from './data/initialData';
 import { Patient, BloodType, Allergy, Vaccination, MedicalRecord, QrAccessRequest } from './types';
 import { parseCompactPatientPayload } from './utils/qrPayload';
-import { fetchPatientFromServer, savePatientToServer, syncPatientsWithServer, mergePatientRecords } from './utils/patientSync';
-import { savePatientsToIDB, loadPatientsFromIDB, saveSinglePatientToIDB, saveSingleRecordToIDB, clearAllFromIDB } from './utils/idbStorage';
+import { fetchPatientFromServer, savePatientToServer, syncPatientsWithServer, mergePatientRecords, deletePatientRecordFromServer } from './utils/patientSync';
+import { savePatientsToIDB, loadPatientsFromIDB, saveSinglePatientToIDB, saveSingleRecordToIDB, deleteRecordFromIDB, clearAllFromIDB } from './utils/idbStorage';
 import { 
   pushPatientToCloud, 
   fetchAllPatientsFromCloud, 
@@ -172,6 +172,7 @@ function DashboardContent() {
   const [vaccineModalOpen, setVaccineModalOpen] = useState(false);
   const [vaccineToEdit, setVaccineToEdit] = useState<Vaccination | null>(null);
   const [recordModalOpen, setRecordModalOpen] = useState(false);
+  const [recordToEdit, setRecordToEdit] = useState<MedicalRecord | null>(null);
   const [initialUploadFile, setInitialUploadFile] = useState<File | null>(null);
   const [viewerRecord, setViewerRecord] = useState<MedicalRecord | null>(null);
   const [notificationsModalOpen, setNotificationsModalOpen] = useState(false);
@@ -273,7 +274,7 @@ function DashboardContent() {
               ...copy[unassignedIdx],
               userId: user.uid,
               email: lowerEmail,
-              name: user.displayName || copy[unassignedIdx].name,
+              name: user.displayName || copy[unassignedIdx]?.name || 'Patient',
             };
             saveStoredPatients(copy);
             savePatientsToIDB(copy).catch(() => {});
@@ -397,9 +398,20 @@ function sanitizePatientData(p: Patient): Patient {
   return {
     ...p,
     name: p.name === 'Sokleap' ? 'Patient' : (p.name || 'Patient'),
-    medicalRecords: (p.medicalRecords || []).filter((r) => r && r.name && !dummyNames.includes(r.name)),
-    allergies: (p.allergies || []).filter((a) => a && a.name),
-    vaccinations: (p.vaccinations || []).filter((v) => v && v.name),
+    emergencyContact: p.emergencyContact && typeof p.emergencyContact === 'object'
+      ? {
+          name: p.emergencyContact.name || 'Emergency Contact',
+          relationship: p.emergencyContact.relationship || 'Family',
+          phone: p.emergencyContact.phone || '',
+        }
+      : {
+          name: 'Emergency Contact',
+          relationship: 'Family',
+          phone: '',
+        },
+    medicalRecords: (p.medicalRecords || []).filter((r: any) => r && r.name && !dummyNames.includes(r.name)),
+    allergies: (p.allergies || []).filter((a: any) => a && a.name),
+    vaccinations: (p.vaccinations || []).filter((v: any) => v && v.name),
   };
 }
 
@@ -635,22 +647,25 @@ function sanitizePatientData(p: Patient): Patient {
       );
 
       let nextList: Patient[];
+      let targetToPersist: Patient;
       if (matchIdx >= 0) {
         nextList = [...prev];
         nextList[matchIdx] = updater(nextList[matchIdx]);
+        targetToPersist = nextList[matchIdx];
       } else {
+        targetToPersist = updatedTarget;
         nextList = [updatedTarget, ...prev];
       }
 
       // 3. Persist to LocalStorage, IndexedDB, backend Server, and Cloud Storage
       saveStoredPatients(nextList);
       savePatientsToIDB(nextList).catch(() => {});
-      saveSinglePatientToIDB(updatedTarget).catch(() => {});
-      savePatientToServer(updatedTarget, currentUser?.uid).catch((err) => {
+      saveSinglePatientToIDB(targetToPersist).catch(() => {});
+      savePatientToServer(targetToPersist, currentUser?.uid).catch((err) => {
         console.warn('savePatientToServer error:', err);
       });
       if (currentUser?.uid) {
-        pushPatientToCloud(updatedTarget, currentUser.uid).catch((err) => {
+        pushPatientToCloud(targetToPersist, currentUser.uid).catch((err) => {
           console.warn('[Cloud] Live update push note:', err);
         });
       }
@@ -843,7 +858,7 @@ function sanitizePatientData(p: Patient): Patient {
           copy[matchIdx] = {
             ...copy[matchIdx],
             userId: user.uid,
-            name: name || copy[matchIdx].name,
+            name: name || copy[matchIdx]?.name || 'Patient',
             email: lowerEmail,
           };
           targetPatient = copy[matchIdx];
@@ -858,7 +873,7 @@ function sanitizePatientData(p: Patient): Patient {
               ? {
                   ...unassigned,
                   userId: user.uid,
-                  name: name || unassigned.name,
+                  name: name || unassigned?.name || 'Patient',
                   email: lowerEmail,
                 }
               : p
@@ -1015,8 +1030,11 @@ function sanitizePatientData(p: Patient): Patient {
   };
 
   const handleDeleteMedicalRecord = (id: string) => {
+    deleteRecordFromIDB(currentPatient.id, id).catch(() => {});
+    deletePatientRecordFromServer(currentPatient.id, id).catch(() => {});
     updateCurrentPatient((p) => ({
       ...p,
+      deletedRecordIds: Array.from(new Set([...(p.deletedRecordIds || []), id])),
       medicalRecords: (p.medicalRecords || []).filter((r) => r.id !== id),
     }));
   };
@@ -1194,8 +1212,8 @@ function sanitizePatientData(p: Patient): Patient {
                     <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
                       <span className="text-slate-500">{t.emergencyContact}:</span>
                       <span className="font-semibold text-slate-800 text-right">
-                        {currentPatient.emergencyContact.name 
-                          ? `${currentPatient.emergencyContact.name} (${currentPatient.emergencyContact.phone})`
+                        {currentPatient?.emergencyContact?.name 
+                          ? `${currentPatient.emergencyContact.name} (${currentPatient.emergencyContact.phone || 'No phone'})`
                           : 'Not provided'}
                       </span>
                     </div>
@@ -1234,12 +1252,19 @@ function sanitizePatientData(p: Patient): Patient {
             <MedicalRecordsSection
               records={currentPatient.medicalRecords}
               onAddRecord={() => {
+                setRecordToEdit(null);
+                setInitialUploadFile(null);
+                setRecordModalOpen(true);
+              }}
+              onEditRecord={(record) => {
+                setRecordToEdit(record);
                 setInitialUploadFile(null);
                 setRecordModalOpen(true);
               }}
               onViewRecord={(record) => setViewerRecord(record)}
               onDeleteRecord={handleDeleteMedicalRecord}
               onDirectFileUpload={(file) => {
+                setRecordToEdit(null);
                 setInitialUploadFile(file);
                 setRecordModalOpen(true);
               }}
@@ -1339,14 +1364,19 @@ function sanitizePatientData(p: Patient): Patient {
         initialData={vaccineToEdit}
       />
 
-      {/* Add Medical Record Modal */}
+      {/* Add / Edit Medical Record Modal */}
       <AddMedicalRecordModal
         isOpen={recordModalOpen}
         onClose={() => {
           setRecordModalOpen(false);
           setInitialUploadFile(null);
+          setRecordToEdit(null);
         }}
-        onSave={handleSaveMedicalRecord}
+        onSave={(rec) => {
+          handleSaveMedicalRecord(rec);
+          setRecordToEdit(null);
+        }}
+        recordToEdit={recordToEdit}
         initialFile={initialUploadFile}
         userId={currentUser?.uid || currentPatient?.userId}
       />

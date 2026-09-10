@@ -31,8 +31,68 @@ const INITIAL_SERVER_PATIENTS = [
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'patients.json');
 const DATA_REQUESTS_FILE = path.join(DATA_DIR, 'access_requests.json');
+const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 
-// Sanitize patient object to ensure no corrupted test data persists
+// Ensure data and uploads directories exist
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+
+// Convert base64 data URLs into persistent files on disk and return public /uploads/ URL
+function saveBase64File(dataUrlOrBase64: string, preferredName: string = 'document'): string {
+  try {
+    if (!dataUrlOrBase64 || typeof dataUrlOrBase64 !== 'string') return dataUrlOrBase64;
+    if (
+      dataUrlOrBase64.startsWith('http://') ||
+      dataUrlOrBase64.startsWith('https://') ||
+      dataUrlOrBase64.startsWith('/uploads/')
+    ) {
+      return dataUrlOrBase64;
+    }
+    if (!dataUrlOrBase64.startsWith('data:')) {
+      return dataUrlOrBase64;
+    }
+
+    if (!fs.existsSync(UPLOADS_DIR)) {
+      fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    }
+
+    const match = dataUrlOrBase64.match(/^data:([^;]+);base64,(.*)$/s);
+    if (!match) return dataUrlOrBase64;
+
+    const mime = match[1] || '';
+    const base64Data = match[2];
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    let ext = '.bin';
+    if (mime.includes('pdf')) ext = '.pdf';
+    else if (mime.includes('png')) ext = '.png';
+    else if (mime.includes('jpeg') || mime.includes('jpg')) ext = '.jpg';
+    else if (mime.includes('webp')) ext = '.webp';
+    else if (mime.includes('gif')) ext = '.gif';
+
+    const safeBaseName = (preferredName || 'doc')
+      .toLowerCase()
+      .replace(/\.[^/.]+$/, '')
+      .replace(/[^a-z0-9_-]/g, '_')
+      .slice(0, 40);
+
+    const filename = `${Date.now()}-${safeBaseName}${ext}`;
+    const filePath = path.join(UPLOADS_DIR, filename);
+    fs.writeFileSync(filePath, buffer);
+
+    console.log(`[Server Storage] Saved base64 document to ${filename} (${buffer.length} bytes)`);
+    return `/uploads/${filename}`;
+  } catch (err) {
+    console.warn('[Server Storage] Failed to save base64 file:', err);
+    return dataUrlOrBase64;
+  }
+}
+
+// Sanitize patient object to ensure no corrupted test data persists & base64 files are saved
 function sanitizePatient(p: any): any {
   if (!p || typeof p !== 'object') return p;
   const dummyNames = [
@@ -44,7 +104,15 @@ function sanitizePatient(p: any): any {
   ];
 
   const cleanedRecords = Array.isArray(p.medicalRecords)
-    ? p.medicalRecords.filter((r: any) => r && r.name && !dummyNames.includes(r.name))
+    ? p.medicalRecords
+        .filter((r: any) => r && r.name && !dummyNames.includes(r.name))
+        .map((r: any) => {
+          if (r && r.imageUrl && typeof r.imageUrl === 'string' && r.imageUrl.startsWith('data:')) {
+            const savedUrl = saveBase64File(r.imageUrl, r.fileName || r.name);
+            return { ...r, imageUrl: savedUrl };
+          }
+          return r;
+        })
     : [];
 
   const cleanedAllergies = Array.isArray(p.allergies)
@@ -55,9 +123,22 @@ function sanitizePatient(p: any): any {
     ? p.vaccinations.filter((v: any) => v && v.name)
     : [];
 
+  const emergencyContact = p.emergencyContact && typeof p.emergencyContact === 'object'
+    ? {
+        name: p.emergencyContact.name || 'Emergency Contact',
+        relationship: p.emergencyContact.relationship || 'Family',
+        phone: p.emergencyContact.phone || '',
+      }
+    : {
+        name: 'Emergency Contact',
+        relationship: 'Family',
+        phone: '',
+      };
+
   return {
     ...p,
-    name: p.name === 'Sokleap' ? 'Patient' : (p.name || 'Patient'),
+    name: p.name || 'Patient',
+    emergencyContact,
     medicalRecords: cleanedRecords,
     allergies: cleanedAllergies,
     vaccinations: cleanedVaccinations,
@@ -134,7 +215,7 @@ const accessRequestsStore: Map<string, any> = loadDiskRequests();
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+  const PORT = 3000;
 
   // Configure JSON parser with generous payload size for uploaded document previews/data URLs
   app.use(express.json({ limit: '60mb' }));
@@ -151,12 +232,41 @@ async function startServer() {
     next();
   });
 
+  // Serve uploaded documents and images statically
+  app.use('/uploads', express.static(UPLOADS_DIR));
+
   // =========================================================================
   // API ROUTES
   // =========================================================================
 
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", patientsCount: patientsStore.length, timestamp: new Date().toISOString() });
+  });
+
+  // Dedicated endpoint to upload and save medical documents/images (PDF, JPG, PNG) directly to persistent disk
+  app.post("/api/upload", (req, res) => {
+    try {
+      const { fileName, fileData, fileType, fileSize } = req.body;
+      if (!fileData) {
+        return res.status(400).json({ success: false, message: "No fileData provided" });
+      }
+
+      const savedUrl = saveBase64File(fileData, fileName || 'medical_document');
+      const originalName = fileName || 'document';
+      const isPdf = (fileType && fileType.includes('pdf')) || originalName.toLowerCase().endsWith('.pdf');
+
+      res.json({
+        success: true,
+        url: savedUrl,
+        fileName: originalName,
+        fileType: isPdf ? 'pdf' : 'image',
+        fileSize: fileSize || (isPdf ? '1.5 MB' : '1.2 MB'),
+        message: "File uploaded and saved successfully",
+      });
+    } catch (err: any) {
+      console.error("[Server Upload] Error processing upload:", err);
+      res.status(500).json({ success: false, message: err?.message || "Failed to save file" });
+    }
   });
 
   // Get all patients
@@ -199,24 +309,31 @@ async function startServer() {
     }
     const updatedPatient = sanitizePatient(rawPatient);
 
-    const existingIndex = patientsStore.findIndex(p => p.id === updatedPatient.id);
+    const existingIndex = patientsStore.findIndex(
+      p => p.id === updatedPatient.id ||
+      (updatedPatient.userId && p.userId === updatedPatient.userId) ||
+      (updatedPatient.email && p.email && p.email.toLowerCase() === updatedPatient.email.toLowerCase())
+    );
     if (existingIndex >= 0) {
-      // Merge medical records so uploaded documents and high-res images are never lost
       const existingRecords = patientsStore[existingIndex].medicalRecords || [];
       const incomingRecords = Array.isArray(updatedPatient.medicalRecords) ? updatedPatient.medicalRecords : [];
+      const existingMap = new Map(existingRecords.map((r: any) => [r.id, r]));
 
-      const recordMap = new Map();
-      existingRecords.forEach((r: any) => { if (r && r.id) recordMap.set(r.id, r); });
-      incomingRecords.forEach((r: any) => {
-        if (r && r.id) {
-          const ex = recordMap.get(r.id);
+      const deletedIds = new Set(
+        Array.isArray(updatedPatient.deletedRecordIds) ? updatedPatient.deletedRecordIds : []
+      );
+
+      // Incoming records is authoritative: if an item was deleted by the user, it is excluded.
+      // We preserve large image URLs if the client only passed the lightweight metadata.
+      const finalRecords = incomingRecords
+        .filter((r: any) => r && r.id && !deletedIds.has(r.id))
+        .map((r: any) => {
+          const ex: any = existingMap.get(r.id);
           if (ex && ex.imageUrl && !r.imageUrl) {
-            recordMap.set(r.id, { ...r, imageUrl: ex.imageUrl, previewContent: r.previewContent || ex.previewContent });
-          } else {
-            recordMap.set(r.id, r);
+            return { ...r, imageUrl: ex.imageUrl, previewContent: r.previewContent || ex.previewContent };
           }
-        }
-      });
+          return r;
+        });
 
       // Merge access requests so allowed notifications never disappear
       const existingReqs = patientsStore[existingIndex].accessRequests || [];
@@ -237,7 +354,7 @@ async function startServer() {
       patientsStore[existingIndex] = {
         ...patientsStore[existingIndex],
         ...updatedPatient,
-        medicalRecords: Array.from(recordMap.values()),
+        medicalRecords: finalRecords,
         accessRequests: Array.from(reqMap.values())
       };
     } else {
@@ -247,6 +364,26 @@ async function startServer() {
 
     const savedPatient = existingIndex >= 0 ? patientsStore[existingIndex] : updatedPatient;
     res.json({ success: true, data: savedPatient });
+  });
+
+  // Explicitly delete a single medical document/record
+  app.delete("/api/patient/:patientId/record/:recordId", (req, res) => {
+    const { patientId, recordId } = req.params;
+    const pIdx = patientsStore.findIndex(p => p.id === patientId);
+    if (pIdx >= 0) {
+      if (Array.isArray(patientsStore[pIdx].medicalRecords)) {
+        patientsStore[pIdx].medicalRecords = patientsStore[pIdx].medicalRecords.filter((r: any) => r.id !== recordId);
+      }
+      if (!Array.isArray(patientsStore[pIdx].deletedRecordIds)) {
+        patientsStore[pIdx].deletedRecordIds = [];
+      }
+      if (!patientsStore[pIdx].deletedRecordIds.includes(recordId)) {
+        patientsStore[pIdx].deletedRecordIds.push(recordId);
+      }
+      saveDiskPatients(patientsStore);
+      return res.json({ success: true, message: "Record deleted", data: patientsStore[pIdx] });
+    }
+    return res.status(404).json({ success: false, message: "Patient not found" });
   });
 
   // =========================================================================
@@ -523,24 +660,29 @@ async function startServer() {
     if (Array.isArray(patients) && patients.length > 0) {
       patients.forEach(newP => {
         const cleanP = sanitizePatient(newP);
-        const idx = patientsStore.findIndex(p => p.id === cleanP.id);
+        const idx = patientsStore.findIndex(
+          p => p.id === cleanP.id ||
+          (cleanP.userId && p.userId === cleanP.userId) ||
+          (cleanP.email && p.email && p.email.toLowerCase() === cleanP.email.toLowerCase())
+        );
         if (idx >= 0) {
-          // Merge record updates cleanly without dropping uploaded medical documents
           const existingRecords = patientsStore[idx].medicalRecords || [];
           const incomingRecords = Array.isArray(cleanP.medicalRecords) ? cleanP.medicalRecords : [];
+          const existingMap = new Map(existingRecords.map((r: any) => [r.id, r]));
 
-          const recordMap = new Map();
-          existingRecords.forEach((r: any) => { if (r && r.id) recordMap.set(r.id, r); });
-          incomingRecords.forEach((r: any) => {
-            if (r && r.id) {
-              const ex = recordMap.get(r.id);
+          const deletedIds = new Set(
+            Array.isArray(cleanP.deletedRecordIds) ? cleanP.deletedRecordIds : []
+          );
+
+          const finalRecords = incomingRecords
+            .filter((r: any) => r && r.id && !deletedIds.has(r.id))
+            .map((r: any) => {
+              const ex: any = existingMap.get(r.id);
               if (ex && ex.imageUrl && !r.imageUrl) {
-                recordMap.set(r.id, { ...r, imageUrl: ex.imageUrl, previewContent: r.previewContent || ex.previewContent });
-              } else {
-                recordMap.set(r.id, r);
+                return { ...r, imageUrl: ex.imageUrl, previewContent: r.previewContent || ex.previewContent };
               }
-            }
-          });
+              return r;
+            });
 
           // Merge access requests so allowed / denied notifications never disappear
           const existingReqs = patientsStore[idx].accessRequests || [];
@@ -561,7 +703,7 @@ async function startServer() {
           patientsStore[idx] = {
             ...patientsStore[idx],
             ...cleanP,
-            medicalRecords: Array.from(recordMap.values()),
+            medicalRecords: finalRecords,
             accessRequests: Array.from(reqMap.values()),
           };
         } else {
@@ -593,8 +735,17 @@ async function startServer() {
     res.json({ success: true, message: "Dummy data cleared", patients: patientsStore });
   });
 
-  // Vite middleware setup for SPA
-  if (process.env.NODE_ENV !== "production") {
+  // Process crash protection
+  process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+  });
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  });
+
+  // Serve static assets or mount Vite middleware
+  const isDev = process.env.npm_lifecycle_event === 'dev' || process.env.NODE_ENV === 'development';
+  if (isDev) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: {
@@ -608,7 +759,15 @@ async function startServer() {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      if (req.path.startsWith('/api')) {
+        return res.status(404).json({ error: 'Endpoint not found' });
+      }
+      const indexPath = path.join(distPath, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(500).send("Index file not found. Please build the application first.");
+      }
     });
   }
 
@@ -616,11 +775,13 @@ async function startServer() {
     console.log(`Sokhapheap Digital Server running on http://0.0.0.0:${PORT}`);
   });
 
-  process.on('SIGTERM', () => {
+  const shutdown = () => {
     server.close(() => {
       process.exit(0);
     });
-  });
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
 startServer();
