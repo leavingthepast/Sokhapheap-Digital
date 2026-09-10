@@ -1,3 +1,4 @@
+import { supabase } from '../supabaseClient';
 import { QrAccessRequest, QrAccessStatus, Patient } from '../types';
 import { STORAGE_KEY_PATIENTS } from '../data/initialData';
 
@@ -98,8 +99,20 @@ export async function submitQrAccessRequest(params: {
     // ignore
   }
 
-  // 2. Post to backend server
+  // 2. Post to backend server & Supabase
   try {
+    const { error: supaErr } = await supabase.from('access_requests').insert({
+      id: requestId,
+      patient_id: params.patientId,
+      qr_token: params.qrToken,
+      requester_name: newRequest.requesterName,
+      requester_role: newRequest.requesterRole,
+      requester_location: newRequest.requesterLocation,
+      status: 'pending',
+      requested_at: newRequest.requestedAt
+    });
+    if (supaErr) console.warn('[Supabase Sync] QR request error:', supaErr);
+
     const res = await fetch('/api/qr-access/request', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -236,8 +249,13 @@ export async function updateQrAccessDecision(
     // ignore
   }
 
-  // 3. Notify server immediately
+  // 3. Notify server & Supabase immediately
   try {
+    await supabase.from('access_requests').update({ 
+      status: newStatus,
+      responded_at: nowIso
+    }).eq('id', requestId);
+    
     await fetch('/api/qr-access/respond', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -307,6 +325,30 @@ export function subscribeToAccessDecision(
   requestId: string | null,
   callback: (status: QrAccessStatus) => void
 ): () => void {
+  let supaChannel: any = null;
+
+  try {
+    const query = requestId 
+      ? `id=eq.${requestId}` 
+      : `patient_id=eq.${patientId}`;
+
+    supaChannel = supabase
+      .channel('public:access_requests:decision')
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'access_requests', filter: query },
+        async (payload) => {
+          if (isClosed) return;
+          if (payload.new && payload.new.status) {
+            callback(payload.new.status);
+          }
+        }
+      )
+      .subscribe();
+  } catch (e) {
+    console.warn('[Supabase] Decision subscribe fail:', e);
+  }
+
   let isClosed = false;
   let eventSource: EventSource | null = null;
 
@@ -388,6 +430,9 @@ export function subscribeToAccessDecision(
     if (eventSource) {
       eventSource.close();
     }
+    if (supaChannel) {
+      supabase.removeChannel(supaChannel);
+    }
     if (broadcastChannel) {
       broadcastChannel.removeEventListener('message', handleBcMessage);
     }
@@ -396,17 +441,48 @@ export function subscribeToAccessDecision(
   };
 }
 
-/**
- * Patient-side subscription to incoming QR access requests.
- * Uses Server-Sent Events (SSE) for instant alerts when a scan request occurs,
- * plus BroadcastChannel and polling.
- */
+export async function fetchIncomingRequests(patientId: string): Promise<QrAccessRequest[] | null> {
+  try {
+    // Check Supabase first
+    const { data: supaReqs } = await supabase.from('access_requests').select('*').eq('patient_id', patientId);
+    if (supaReqs && supaReqs.length > 0) {
+      return supaReqs.map((r: any) => ({
+        id: r.id,
+        patientId: r.patient_id,
+        qrToken: r.qr_token,
+        requesterName: r.requester_name,
+        requesterRole: r.requester_role,
+        requesterLocation: r.requester_location,
+        status: r.status,
+        requestedAt: r.requested_at,
+        respondedAt: r.responded_at
+      }));
+    }
+  } catch(e) {}
+  
+  try {
+    const res = await fetch(`/api/qr-access/requests?patientId=${encodeURIComponent(patientId)}`);
+    if (res.ok) {
+      const json = await res.json();
+      if (json.success && Array.isArray(json.requests)) {
+        return json.requests;
+      }
+    }
+  } catch {
+    // fallback
+  }
+  return null;
+}
+
+
+
 export function subscribeToIncomingRequests(
   patientId: string,
   onRequestsUpdate: (requests: QrAccessRequest[], isNewAlert?: boolean) => void
 ): () => void {
   let isClosed = false;
   let eventSource: EventSource | null = null;
+  let supaChannel: any = null;
 
   // Immediate initial fetch
   if (patientId) {
@@ -417,7 +493,35 @@ export function subscribeToIncomingRequests(
     }).catch(() => {});
   }
 
-  // 1. Instant SSE Push Subscription
+  // 1. Supabase Realtime Subscription
+  try {
+    supaChannel = supabase
+      .channel(`public:access_requests:patient_id=eq.${patientId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'access_requests', filter: `patient_id=eq.${patientId}` },
+        async () => {
+          if (isClosed) return;
+          playNotificationAlertChime();
+          const list = await fetchIncomingRequests(patientId);
+          if (list) onRequestsUpdate(list, true);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'access_requests', filter: `patient_id=eq.${patientId}` },
+        async () => {
+          if (isClosed) return;
+          const list = await fetchIncomingRequests(patientId);
+          if (list) onRequestsUpdate(list, false);
+        }
+      )
+      .subscribe();
+  } catch (e) {
+    console.warn('[Supabase Realtime] Subscribe failed:', e);
+  }
+
+  // 2. Instant SSE Push Subscription (Fallback)
   if (typeof window !== 'undefined' && 'EventSource' in window && patientId) {
     try {
       eventSource = new EventSource(`/api/qr-access/events?patientId=${encodeURIComponent(patientId)}`);
@@ -446,7 +550,7 @@ export function subscribeToIncomingRequests(
     }
   }
 
-  // 2. BroadcastChannel listener
+  // 3. BroadcastChannel listener
   const handleBcMessage = (event: MessageEvent) => {
     if (isClosed) return;
     const data = event.data;
@@ -461,67 +565,20 @@ export function subscribeToIncomingRequests(
     }
   };
 
-  // 3. Window storage listener
-  const handleStorage = (event: StorageEvent) => {
-    if (isClosed) return;
-    if (event.key === 'sokhapheap_latest_qr_request_event' && event.newValue) {
-      try {
-        const parsed = JSON.parse(event.newValue);
-        if (parsed?.request?.patientId === patientId) {
-          playNotificationAlertChime();
-          fetchIncomingRequests(patientId).then((list) => {
-            if (list) onRequestsUpdate(list, true);
-          });
-        }
-      } catch {
-        // ignore
-      }
-    }
-  };
-
   if (broadcastChannel) {
     broadcastChannel.addEventListener('message', handleBcMessage);
   }
-  window.addEventListener('storage', handleStorage);
-
-  // 4. Polling fallback (every 1.5 seconds)
-  const pollInterval = setInterval(async () => {
-    if (isClosed) return;
-    try {
-      const list = await fetchIncomingRequests(patientId);
-      if (list && list.length > 0) {
-        onRequestsUpdate(list, false);
-      }
-    } catch {
-      // ignore
-    }
-  }, 1500);
 
   return () => {
     isClosed = true;
     if (eventSource) {
       eventSource.close();
     }
+    if (supaChannel) {
+      supabase.removeChannel(supaChannel);
+    }
     if (broadcastChannel) {
       broadcastChannel.removeEventListener('message', handleBcMessage);
     }
-    window.removeEventListener('storage', handleStorage);
-    clearInterval(pollInterval);
   };
 }
-
-export async function fetchIncomingRequests(patientId: string): Promise<QrAccessRequest[] | null> {
-  try {
-    const res = await fetch(`/api/qr-access/requests?patientId=${encodeURIComponent(patientId)}`);
-    if (res.ok) {
-      const json = await res.json();
-      if (json.success && Array.isArray(json.requests)) {
-        return json.requests;
-      }
-    }
-  } catch {
-    // fallback
-  }
-  return null;
-}
-
