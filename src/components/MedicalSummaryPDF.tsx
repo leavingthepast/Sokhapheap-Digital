@@ -208,11 +208,11 @@ export const MedicalSummaryPDF: React.FC<MedicalSummaryPDFProps> = ({ patient, o
             </h2>
           </div>
 
-          {(patient.vaccinations || []).length === 0 ? (
+          {patient.vaccinations.length === 0 ? (
             <p className="text-xs text-slate-500 italic">{t.noVaccinations || 'No vaccination records on file.'}</p>
           ) : (
             <div className="space-y-2 text-xs">
-              {(patient.vaccinations || []).map((vac) => (
+              {patient.vaccinations.map((vac) => (
                 <div key={vac.id} className="p-2.5 rounded-lg bg-white border border-sky-200 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                   <div>
                     <span className="font-bold text-slate-900">{vac.name}</span>
@@ -240,7 +240,7 @@ export const MedicalSummaryPDF: React.FC<MedicalSummaryPDFProps> = ({ patient, o
             <p className="text-xs text-slate-500 italic">No recorded past illnesses or chronic diagnoses.</p>
           ) : (
             <div className="space-y-2 text-xs">
-              {(patient.illnessHistory || []).map((ill) => (
+              {patient.illnessHistory.map((ill) => (
                 <div key={ill.id} className="p-2.5 rounded-lg bg-white border border-slate-200">
                   <div className="flex items-center justify-between mb-1">
                     <span className="font-bold text-slate-900">{ill.condition}</span>
@@ -272,7 +272,7 @@ export const MedicalSummaryPDF: React.FC<MedicalSummaryPDFProps> = ({ patient, o
             <p className="text-xs text-slate-500 italic">No uploaded medical documents or scans.</p>
           ) : (
             <div className="space-y-2 text-xs">
-              {(patient.medicalRecords || []).map((rec) => (
+              {patient.medicalRecords.map((rec) => (
                 <div key={rec.id} className="p-2.5 rounded-lg bg-white border border-slate-200 flex items-center justify-between gap-4">
                   <div className="space-y-0.5">
                     <div className="flex items-center gap-2">

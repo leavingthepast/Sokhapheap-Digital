@@ -651,13 +651,13 @@ export const DoctorMedicalRecordView: React.FC<DoctorViewProps> = ({ patient, on
                 <span>{t.immunizationRecords}</span>
               </div>
 
-              {(patient.vaccinations || []).length === 0 ? (
+              {patient.vaccinations.length === 0 ? (
                 <div className="py-6 text-center text-xs text-slate-400 italic">
                   {t.noVaccinations || 'No immunization records on file.'}
                 </div>
               ) : (
                 <div className="space-y-2.5">
-                  {(patient.vaccinations || []).map((vac) => (
+                  {patient.vaccinations.map((vac) => (
                     <div key={vac.id} className="p-3 rounded-xl bg-sky-50/50 border border-sky-200 flex items-center justify-between text-xs">
                       <div>
                         <span className="font-bold text-slate-900 block">{vac.name}</span>

@@ -1,6 +1,6 @@
 import { supabase } from '../supabaseClient';
 import { QrAccessRequest, QrAccessStatus, Patient } from '../types';
-import { STORAGE_KEY_PATIENTS } from '../data/initialData.ts';
+import { STORAGE_KEY_PATIENTS } from '../data/initialData';
 
 const ACCESS_CHANNEL_NAME = 'sokhapheap_qr_access_channel';
 const STORAGE_DEVICE_KEY = 'sokhapheap_scanner_device_id';
@@ -331,7 +331,6 @@ export function subscribeToAccessDecision(
   requestId: string | null,
   callback: (status: QrAccessStatus) => void
 ): () => void {
-  let isClosed = false;
   let supaChannel: any = null;
 
   try {
@@ -356,6 +355,7 @@ export function subscribeToAccessDecision(
     console.warn('[Supabase] Decision subscribe fail:', e);
   }
 
+  let isClosed = false;
   let eventSource: EventSource | null = null;
 
   // 1. Instant SSE Push Subscription
@@ -429,7 +429,9 @@ export function subscribeToAccessDecision(
     } catch {
       // ignore
     }
-  }, 2500);
+  }, 5000);
+
+
 
   return () => {
     isClosed = true;
@@ -587,7 +589,7 @@ export function subscribeToIncomingRequests(
     } catch {
       // ignore
     }
-  }, 5000);
+  }, 6000);
 
   return () => {
     isClosed = true;
