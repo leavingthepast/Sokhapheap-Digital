@@ -28,7 +28,9 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncSuccess, setSyncSuccess] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const initial = patient?.name ? patient.name.charAt(0).toUpperCase() : 'P';
+  if (!patient) return null;
+
+  const initial = patient.name ? patient.name.charAt(0).toUpperCase() : 'P';
 
   const pendingRequestsCount = (patient?.accessRequests || []).filter(
     (r) => r.status === 'pending'
@@ -75,9 +77,9 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
             className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-white/20 border-2 border-white/40 overflow-hidden shadow-md shrink-0 cursor-pointer hover:border-white transition-all group flex items-center justify-center"
             title={t.editYourProfile || "Edit your profile"}
           >
-            {patient.profilePicture ? (
+            {patient?.profilePicture ? (
               <img
-                src={patient?.profilePicture}
+                src={patient.profilePicture}
                 alt={patient?.name || 'Patient'}
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform"
               />

@@ -4,7 +4,7 @@ import {
   saveStoredPatients, 
   STORAGE_KEY_ACTIVE_USER,
   INITIAL_PATIENTS 
-} from './data/initialData';
+} from './data/initialData.ts';
 import { Patient, BloodType, Allergy, Vaccination, MedicalRecord, QrAccessRequest } from './types';
 import { parseCompactPatientPayload } from './utils/qrPayload';
 import { fetchPatientFromServer, savePatientToServer, syncPatientsWithServer, mergePatientRecords, deletePatientRecordFromServer } from './utils/patientSync';

@@ -2,7 +2,11 @@ const { createClient } = require('@supabase/supabase-js');
 const supabase = createClient('https://bzmulqaarhwcnazkzdev.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6bXVscWFhcmh3Y25hemt6ZGV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg4NTQyNjIsImV4cCI6MjEwNDQzMDI2Mn0.I9_Wptt5o6ZuSSMydMmsHOdmgVED5z40arHhKzhS-wE');
 
 async function test() {
-  const { data, error } = await supabase.from('access_requests').select('*').limit(1);
-  console.log("Access requests:", data, error);
+  const { data, error } = await supabase.from('access_requests').insert({
+    id: 'test-req-123',
+    patient_id: 'SKP-TEST',
+    status: 'pending'
+  });
+  console.log("Insert result:", { data, error });
 }
 test();

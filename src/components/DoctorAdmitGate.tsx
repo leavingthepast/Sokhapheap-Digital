@@ -50,6 +50,26 @@ export const DoctorAdmitGate: React.FC<DoctorAdmitGateProps> = ({
   const [isChecking, setIsChecking] = useState(false);
   const [freshPatientData, setFreshPatientData] = useState<Patient | null>(null);
 
+  if (!patient) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-sm text-center max-w-sm border border-slate-200">
+          <div className="w-16 h-16 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mx-auto mb-4">
+            <ShieldAlert className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl font-bold text-slate-800 mb-2">Invalid Access</h2>
+          <p className="text-slate-500 mb-6 text-sm">No patient data found. Please scan a valid QR code.</p>
+          <button 
+            onClick={onExit}
+            className="px-6 py-2 bg-teal-600 text-white font-semibold rounded-lg hover:bg-teal-700"
+          >
+            Return Home
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // Initial check on mount: strictly verify if THIS session has a specific saved request ID that was allowed
   useEffect(() => {
     let isMounted = true;

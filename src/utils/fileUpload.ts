@@ -47,37 +47,6 @@ export async function uploadMedicalDocument(
     }
   }
 
-  // 1. Primary: Upload to persistent server disk storage (/api/upload)
-  try {
-    const res = await fetch('/api/upload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        fileName: file.name,
-        fileType: file.type || (isPdf ? 'application/pdf' : 'image/jpeg'),
-        fileSize: sizeStr,
-        fileData: uploadPayload,
-        userId: userId || undefined,
-      }),
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success && data.url) {
-        return {
-          success: true,
-          url: data.url,
-          fileName: file.name,
-          fileSize: sizeStr,
-          fileType: detectedType,
-          storageProvider: 'server',
-        };
-      }
-    }
-  } catch (err) {
-    console.warn('[Upload] Server upload notice:', err);
-  }
-
   // 2. Secondary: Attempt Supabase Storage
   try {
     const supabaseRes = await uploadToSupabaseStorage(file, file.name, userId);

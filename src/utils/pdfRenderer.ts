@@ -3,8 +3,6 @@ import * as pdfjsLib from 'pdfjs-dist';
 // Configure PDF.js worker reliably with local asset priority to avoid external CDN timeouts or CORS failures
 if (typeof window !== 'undefined') {
   try {
-    const version = pdfjsLib.version || '6.3.289';
-    // 1. Try local same-origin worker first (fastest, offline capable, zero CORS)
     if (pdfjsLib.GlobalWorkerOptions) {
       pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
     }

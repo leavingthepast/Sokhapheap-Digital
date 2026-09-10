@@ -1,6 +1,6 @@
 import { supabase } from '../supabaseClient';
 import { QrAccessRequest, QrAccessStatus, Patient } from '../types';
-import { STORAGE_KEY_PATIENTS } from '../data/initialData';
+import { STORAGE_KEY_PATIENTS } from '../data/initialData.ts';
 
 const ACCESS_CHANNEL_NAME = 'sokhapheap_qr_access_channel';
 const STORAGE_DEVICE_KEY = 'sokhapheap_scanner_device_id';
@@ -101,7 +101,7 @@ export async function submitQrAccessRequest(params: {
 
   // 2. Post to backend server & Supabase
   try {
-    const { error: supaErr } = await supabase.from('access_requests').insert({
+    const { error: supaErr } = await supabase.from('qr_access_requests').insert({
       id: requestId,
       patient_id: params.patientId,
       qr_token: params.qrToken,
@@ -150,6 +150,12 @@ export async function checkQrAccessStatus(params: {
 }): Promise<QrAccessStatus> {
   const reqId = params.requestId || getSavedRequestIdForPatient(params.patientId);
   if (!reqId) return 'none';
+
+  // 0. Try Supabase
+  try {
+    const { data } = await supabase.from('qr_access_requests').select('status').eq('id', reqId).single();
+    if (data && data.status) return data.status as QrAccessStatus;
+  } catch(e) {}
 
   // 1. Try server endpoint
   try {
@@ -251,7 +257,7 @@ export async function updateQrAccessDecision(
 
   // 3. Notify server & Supabase immediately
   try {
-    await supabase.from('access_requests').update({ 
+    await supabase.from('qr_access_requests').update({ 
       status: newStatus,
       responded_at: nowIso
     }).eq('id', requestId);
@@ -325,6 +331,7 @@ export function subscribeToAccessDecision(
   requestId: string | null,
   callback: (status: QrAccessStatus) => void
 ): () => void {
+  let isClosed = false;
   let supaChannel: any = null;
 
   try {
@@ -336,7 +343,7 @@ export function subscribeToAccessDecision(
       .channel('public:access_requests:decision')
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'access_requests', filter: query },
+        { event: 'UPDATE', schema: 'public', table: 'qr_access_requests', filter: query },
         async (payload) => {
           if (isClosed) return;
           if (payload.new && payload.new.status) {
@@ -349,7 +356,6 @@ export function subscribeToAccessDecision(
     console.warn('[Supabase] Decision subscribe fail:', e);
   }
 
-  let isClosed = false;
   let eventSource: EventSource | null = null;
 
   // 1. Instant SSE Push Subscription
@@ -423,7 +429,7 @@ export function subscribeToAccessDecision(
     } catch {
       // ignore
     }
-  }, 350);
+  }, 2500);
 
   return () => {
     isClosed = true;
@@ -444,7 +450,7 @@ export function subscribeToAccessDecision(
 export async function fetchIncomingRequests(patientId: string): Promise<QrAccessRequest[] | null> {
   try {
     // Check Supabase first
-    const { data: supaReqs } = await supabase.from('access_requests').select('*').eq('patient_id', patientId);
+    const { data: supaReqs } = await supabase.from('qr_access_requests').select('*').eq('patient_id', patientId);
     if (supaReqs && supaReqs.length > 0) {
       return supaReqs.map((r: any) => ({
         id: r.id,
@@ -499,7 +505,7 @@ export function subscribeToIncomingRequests(
       .channel(`public:access_requests:patient_id=eq.${patientId}`)
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'access_requests', filter: `patient_id=eq.${patientId}` },
+        { event: 'INSERT', schema: 'public', table: 'qr_access_requests', filter: `patient_id=eq.${patientId}` },
         async () => {
           if (isClosed) return;
           playNotificationAlertChime();
@@ -509,7 +515,7 @@ export function subscribeToIncomingRequests(
       )
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'access_requests', filter: `patient_id=eq.${patientId}` },
+        { event: 'UPDATE', schema: 'public', table: 'qr_access_requests', filter: `patient_id=eq.${patientId}` },
         async () => {
           if (isClosed) return;
           const list = await fetchIncomingRequests(patientId);
@@ -569,8 +575,23 @@ export function subscribeToIncomingRequests(
     broadcastChannel.addEventListener('message', handleBcMessage);
   }
 
+  // 3. Fast polling fallback (every 3 seconds) for guaranteed responsiveness
+  const intervalId = setInterval(async () => {
+    if (isClosed) return;
+    try {
+      const list = await fetchIncomingRequests(patientId);
+      if (list) {
+        // We trigger an update, UI will diff it against current state
+        onRequestsUpdate(list, false);
+      }
+    } catch {
+      // ignore
+    }
+  }, 5000);
+
   return () => {
     isClosed = true;
+    clearInterval(intervalId);
     if (eventSource) {
       eventSource.close();
     }

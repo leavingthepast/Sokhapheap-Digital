@@ -40,7 +40,7 @@ export async function pushPatientToCloud(
     // Upsert Access Requests to the access_requests table if they exist
     if (patient.accessRequests && patient.accessRequests.length > 0) {
       for (const req of patient.accessRequests) {
-        await supabase.from('access_requests').upsert({
+        await supabase.from('qr_access_requests').upsert({
           id: req.id,
           patient_id: req.patientId,
           qr_token: req.qrToken,
@@ -89,7 +89,7 @@ async function assemblePatientFromDb(patientBase: any): Promise<Patient> {
 
   // Fetch access requests
   const { data: requests } = await supabase
-    .from('access_requests')
+    .from('qr_access_requests')
     .select('*')
     .eq('patient_id', patientBase.id);
 
@@ -210,7 +210,7 @@ export function subscribeToPatientCloud(
     .channel(`public:access_requests:patient_id=eq.${patientId}`)
     .on(
       'postgres_changes',
-      { event: '*', schema: 'public', table: 'access_requests', filter: `patient_id=eq.${patientId}` },
+      { event: '*', schema: 'public', table: 'qr_access_requests', filter: `patient_id=eq.${patientId}` },
       async () => {
         const remote = await fetchPatientFromCloud(patientId);
         if (remote) onUpdate(remote);

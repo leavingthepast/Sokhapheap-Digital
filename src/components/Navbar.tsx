@@ -26,7 +26,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenNotifications,
 }) => {
   const { t } = useLanguage();
-  const initial = patient?.name ? patient.name.charAt(0).toUpperCase() : 'P';
+  if (!patient) return null;
+
+  const initial = patient.name ? patient.name.charAt(0).toUpperCase() : 'P';
   const allRequests = patient?.accessRequests || [];
   const pendingCount = allRequests.filter((r) => r.status === 'pending').length;
   const allowedCount = allRequests.filter((r) => r.status === 'allowed').length;
