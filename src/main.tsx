@@ -24,6 +24,16 @@ class ErrorBoundary extends Component<Props, State> {
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('Uncaught error:', error, errorInfo);
+    try {
+      const reloadedKey = 'sokhapheap_auto_reloaded_once';
+      if (!sessionStorage.getItem(reloadedKey)) {
+        sessionStorage.setItem(reloadedKey, 'true');
+        localStorage.clear();
+        window.location.reload();
+      }
+    } catch {
+      // ignore
+    }
   }
 
   public render() {
